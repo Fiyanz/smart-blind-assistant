@@ -8,6 +8,7 @@ import '../core/utils/logger.dart';
 import '../core/utils/permissions_handler.dart';
 import '../models/ble_device.dart';
 import '../services/ble_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Provider untuk state koneksi BLE.
 ///
@@ -108,9 +109,19 @@ class BleProvider extends ChangeNotifier {
       AppLogger.info(_tag, 'Lokasi aktif dan izin diberikan');
     }
 
-    // 5. Mulai scan
+    // 5. Load last connected device ID
+    String? lastBleId;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      lastBleId = prefs.getString('last_ble_id');
+    } catch (e) {
+      AppLogger.warning(_tag, 'Gagal load last_ble_id: $e');
+    }
+
+    // 6. Mulai scan
     _isScanning = true;
     _devices = [];
+    bool isAutoConnecting = false;
     notifyListeners();
 
     AppLogger.info(_tag, 'Semua syarat terpenuhi, mulai scanning...');
@@ -122,6 +133,20 @@ class BleProvider extends ChangeNotifier {
         AppLogger.info(
             _tag, 'Update: ${foundDevices.length} perangkat ditemukan');
         notifyListeners();
+
+        // Coba auto-connect jika id cocok
+        if (lastBleId != null && !isAutoConnecting) {
+          try {
+            final target = foundDevices.firstWhere((d) => d.id == lastBleId);
+            isAutoConnecting = true;
+            AppLogger.info(_tag, 'Menemukan perangkat sebelumnya (${target.name}), mencoba auto-connect...');
+            stopScan().then((_) {
+              connectToDevice(target);
+            });
+          } catch (e) {
+            // Device belum ada di batch ini
+          }
+        }
       },
       onError: (error) {
         AppLogger.error(_tag, 'Error saat scanning', error);
@@ -157,13 +182,45 @@ class BleProvider extends ChangeNotifier {
 
   // ─── Connect ───────────────────────────────────────────────
 
+  /// Mencoba auto-connect ke perangkat terakhir yang terhubung saat aplikasi dibuka.
+  Future<void> autoConnectToLastDevice() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastBleId = prefs.getString('last_ble_id');
+
+      if (lastBleId != null && lastBleId.isNotEmpty) {
+        AppLogger.info(_tag, 'Mencoba auto-connect ke perangkat terakhir: $lastBleId');
+        
+        // Buat dummy BleDevice dengan nama 'SightAssist (Auto)'
+        final dummyDevice = BleDevice(
+          id: lastBleId,
+          name: 'SightAssist (Auto)',
+          rssi: 0,
+        );
+        
+        // Panggil connectToDevice, service akan handle dengan autoConnect: true
+        await connectToDevice(dummyDevice, autoConnect: true);
+      }
+    } catch (e) {
+      AppLogger.warning(_tag, 'Gagal melakukan auto-connect: $e');
+    }
+  }
+
   /// Hubungkan ke perangkat BLE.
-  Future<bool> connectToDevice(BleDevice device) async {
-    final success = await _bleService.connect(device.id);
+  Future<bool> connectToDevice(BleDevice device, {bool autoConnect = false}) async {
+    final success = await _bleService.connect(device.id, autoConnect: autoConnect);
 
     if (success) {
       _connectedDevice = device.copyWith(isConnected: true);
       AppLogger.info(_tag, 'Terhubung ke ${device.name}');
+      
+      // Simpan device id untuk auto-connect selanjutnya
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('last_ble_id', device.id);
+      } catch (e) {
+        AppLogger.error(_tag, 'Gagal menyimpan last_ble_id', e);
+      }
     } else {
       AppLogger.error(_tag, 'Gagal terhubung ke ${device.name}');
     }
@@ -176,6 +233,9 @@ class BleProvider extends ChangeNotifier {
   Future<void> disconnect() async {
     await _bleService.disconnect();
     _connectedDevice = null;
+    
+    // Jangan hapus last_ble_id agar bisa auto-reconnect saat app dibuka lagi,
+    // kecuali jika user secara eksplisit "Forget Device" (belum ada fitur ini).
     notifyListeners();
     AppLogger.info(_tag, 'Koneksi diputus');
   }

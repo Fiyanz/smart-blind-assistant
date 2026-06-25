@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 
+import 'package:wakelock_plus/wakelock_plus.dart';
+
 import 'app.dart';
 import 'core/utils/logger.dart';
 import 'core/utils/platform_helper.dart';
@@ -14,6 +16,9 @@ import 'services/background_service.dart';
 /// Entry point aplikasi SightAssist.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Mencegah layar mati otomatis agar kamera selalu siap jika ditekan dari BLE
+  WakelockPlus.enable();
 
   // Kunci orientasi ke portrait (hanya di mobile)
   if (PlatformHelper.isMobile) {
@@ -26,8 +31,11 @@ void main() async {
   await dotenv.load(fileName: ".env");
 
   // Inisialisasi background service (hanya di mobile)
+  // Hanya configure, TIDAK start — start dilakukan di HomeScreen
+  // setelah permission notifikasi diberikan (Android 13+)
   if (PlatformHelper.isBackgroundServiceSupported) {
     await BackgroundService.initialize();
+    AppLogger.info('Main', 'Background service dikonfigurasi');
   } else {
     AppLogger.info('Main', 'Background service di-skip (platform desktop)');
   }

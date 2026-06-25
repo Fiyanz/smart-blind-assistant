@@ -139,17 +139,18 @@ class BleService {
   // ─── Connect ───────────────────────────────────────────────
 
   /// Hubungkan ke perangkat BLE berdasarkan device ID.
-  Future<bool> connect(String deviceId) async {
+  /// Jika autoConnect = true, OS akan mencoba auto-reconnect saat perangkat nyala/masuk range.
+  Future<bool> connect(String deviceId, {bool autoConnect = false}) async {
     if (!PlatformHelper.isBleSupported) {
       AppLogger.warning(_tag, 'BLE tidak didukung di platform ini');
       return false;
     }
 
     try {
-      AppLogger.info(_tag, 'Menghubungkan ke $deviceId...');
+      AppLogger.info(_tag, 'Menghubungkan ke $deviceId... (autoConnect: $autoConnect)');
 
       final device = BluetoothDevice.fromId(deviceId);
-      await device.connect(timeout: const Duration(seconds: 10));
+      await device.connect(timeout: const Duration(seconds: 10), autoConnect: autoConnect);
 
       _connectedDevice = device;
       AppLogger.info(_tag, 'Terhubung ke ${device.platformName}');

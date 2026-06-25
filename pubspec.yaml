@@ -53,6 +53,8 @@ dependencies:
   # Optimasi: Kompresi gambar & ML Kit lokal
   flutter_image_compress: ^2.3.0
   google_mlkit_object_detection: ^0.15.0
+  flutter_local_notifications: ^22.0.1
+  wakelock_plus: ^1.6.1
 
 dev_dependencies:
   flutter_test:
