@@ -112,11 +112,6 @@ smart-blind-assistant/
 │   └── routes/
 │       └── app_router.dart                # Routing halaman
 │
-├── esp32_firmware/                        # Firmware ESP32-C3 (BLE)
-│   ├── platformio.ini                     # Konfigurasi PlatformIO
-│   └── src/
-│       └── main.cpp                       # Firmware BLE (NimBLE)
-│
 └── .env                                   # OPENROUTER_API_KEY
 ```
 
@@ -163,18 +158,11 @@ flutter run
 
 ### Setup Firmware ESP32
 
-```bash
-cd esp32_firmware
+Firmware ESP32-C3 dipisah ke repo tersedia di:
 
-# Build
-platformio run
+**https://github.com/Fiyanz/hardware-smart-blind-assistant**
 
-# Upload ke ESP32-C3
-platformio run -t upload
-
-# Monitor serial output
-platformio device monitor
-```
+Ikuti petunjuk build & flash di repo tersebut.
 
 > **Catatan**: Setelah flash, ESP32 akan muncul di BLE scan sebagai **"SightAssist-ESP32"**. Hubungkan dari halaman Scan di app Flutter.
 
@@ -188,8 +176,8 @@ platformio device monitor
 | BLE Char UUID | `app_constants.dart` | `beb5483e-...` |
 | Bahasa TTS | `app_constants.dart` | `id-ID` |
 | Kecepatan TTS | `app_constants.dart` | `0.5` |
-| Tombol Voice (ESP32) | `main.cpp` | GPIO 2 |
-| Tombol Mode (ESP32) | `main.cpp` | GPIO 3 |
+| Tombol Voice (ESP32) | [hardware repo](https://github.com/Fiyanz/hardware-smart-blind-assistant) | GPIO 2 |
+| Tombol Mode (ESP32) | [hardware repo](https://github.com/Fiyanz/hardware-smart-blind-assistant) | GPIO 3 |
 
 ## 📋 Perintah Development
 
