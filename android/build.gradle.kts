@@ -20,7 +20,7 @@ subprojects {
     afterEvaluate {
         if (project.extensions.findByName("android") != null) {
             project.extensions.configure<com.android.build.gradle.BaseExtension>("android") {
-                compileSdkVersion(35)
+                compileSdkVersion(36)
             }
         }
     }
