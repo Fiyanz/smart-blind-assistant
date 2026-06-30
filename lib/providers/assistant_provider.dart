@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/constants/app_strings.dart';
@@ -90,7 +90,7 @@ extension AssistantModeExtension on AssistantMode {
 /// 2 Tombol ESP:
 /// - Tombol 1 (trigger=1): Perintah suara (STT)
 /// - Tombol 2 (trigger=2): Ganti mode (cycle)
-class AssistantProvider extends ChangeNotifier {
+class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
   static const String _tag = 'AssistantProvider';
 
   final CameraService _cameraService = CameraService();
@@ -116,6 +116,7 @@ class AssistantProvider extends ChangeNotifier {
   bool _locationReady = false;
   String _locationDescription = '';
   bool _blockAutoListen = false;
+  bool _isAppInBackground = false;
 
   /// Guard agar _onVoiceInputComplete tidak dipanggil 2x bersamaan
   /// (dari onResult isFinal DAN _handleSttStatus 'done')
@@ -223,6 +224,8 @@ class AssistantProvider extends ChangeNotifier {
   /// Inisialisasi semua service.
   Future<void> initialize() async {
     AppLogger.info(_tag, 'Menginisialisasi services...');
+    
+    WidgetsBinding.instance.addObserver(this);
 
     _cameraReady = await _cameraService.initialize();
     _sttReady = await _sttService.initialize();
@@ -239,6 +242,17 @@ class AssistantProvider extends ChangeNotifier {
 
     notifyListeners();
     AppLogger.info(_tag, 'Services siap (kamera: $_cameraReady, stt: $_sttReady, lokasi: $_locationReady)');
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.hidden) {
+      _isAppInBackground = true;
+      AppLogger.info(_tag, 'Aplikasi pindah ke background/layar mati');
+    } else if (state == AppLifecycleState.resumed) {
+      _isAppInBackground = false;
+      AppLogger.info(_tag, 'Aplikasi kembali ke foreground');
+    }
   }
 
   /// Mulai mendengarkan trigger stream dari BLE.
@@ -657,7 +671,7 @@ class AssistantProvider extends ChangeNotifier {
         await _ttsService.speak(AppStrings.ttsBleTriggerReceived);
       }
 
-      final imagePath = await _cameraService.captureFrame();
+      final imagePath = await _cameraService.captureFrame(isBackground: _isAppInBackground);
       if (imagePath == null) {
         throw Exception('Gagal mengambil gambar');
       }
@@ -816,7 +830,7 @@ class AssistantProvider extends ChangeNotifier {
       // 2. CAPTURING IMAGE
       _setStatus(AssistantStatus.capturing);
       
-      final imagePath = await _cameraService.captureFrame();
+      final imagePath = await _cameraService.captureFrame(isBackground: _isAppInBackground);
       if (imagePath == null) {
         throw Exception('Gagal mengambil gambar');
       }
@@ -995,6 +1009,7 @@ class AssistantProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     stopAll();
     _triggerSubscription?.cancel();
     _cameraService.dispose();

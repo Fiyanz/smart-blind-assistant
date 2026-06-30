@@ -61,7 +61,7 @@ class CameraService {
   ///
   /// Mengembalikan path file gambar yang disimpan di temp directory,
   /// atau `null` jika gagal.
-  Future<String?> captureFrame() async {
+  Future<String?> captureFrame({bool isBackground = false}) async {
     if (_controller == null || !_controller!.value.isInitialized) {
       AppLogger.warning(_tag, 'Kamera belum siap, mencoba inisialisasi ulang...');
       final success = await initialize();
@@ -74,7 +74,12 @@ class CameraService {
     }
 
     try {
-      return await _takeAndSavePicture();
+      final path = await _takeAndSavePicture();
+      if (isBackground) {
+        AppLogger.info(_tag, 'Background capture selesai, melepas sensor kamera');
+        await dispose();
+      }
+      return path;
     } catch (e) {
       AppLogger.error(_tag, 'Gagal mengambil gambar (kemungkinan layar mati/background), mencoba re-init...', e);
       
@@ -84,7 +89,12 @@ class CameraService {
       if (success) {
         await Future.delayed(const Duration(milliseconds: 500));
         try {
-          return await _takeAndSavePicture();
+          final path2 = await _takeAndSavePicture();
+          if (isBackground) {
+            AppLogger.info(_tag, 'Background capture re-init selesai, melepas sensor kamera');
+            await dispose();
+          }
+          return path2;
         } catch (e2) {
           AppLogger.error(_tag, 'Gagal mengambil gambar setelah re-init', e2);
           return null;
