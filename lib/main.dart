@@ -10,6 +10,7 @@ import 'providers/assistant_provider.dart';
 import 'providers/ble_provider.dart';
 import 'providers/settings_provider.dart';
 import 'services/background_service.dart';
+import 'services/supabase_service.dart';
 
 /// Entry point aplikasi SightAssist.
 void main() async {
@@ -24,6 +25,9 @@ void main() async {
 
   // Load environment variables
   await dotenv.load(fileName: ".env");
+
+  // Inisialisasi Supabase
+  await SupabaseService.initialize();
 
   // Inisialisasi background service (hanya di mobile)
   if (PlatformHelper.isBackgroundServiceSupported) {

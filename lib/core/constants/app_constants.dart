@@ -40,6 +40,13 @@ class AppConstants {
   /// Model AI yang digunakan (Gemini Vision via OpenRouter)
   static const String aiModel = 'google/gemini-2.5-flash';
 
+  // ─── Supabase ──────────────────────────────────────────────
+  /// URL Supabase
+  static String get supabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
+
+  /// Anon Key Supabase
+  static String get supabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
+
   // ─── Kamera ────────────────────────────────────────────────
   /// Resolusi kamera yang digunakan
   /// ResolutionPreset: low, medium, high, veryHigh, ultraHigh, max

@@ -9,6 +9,7 @@ import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
 import '../models/ai_response.dart';
 import '../models/capture_payload.dart';
+import 'supabase_service.dart';
 
 /// Service untuk komunikasi dengan OpenRouter API.
 ///
@@ -298,6 +299,14 @@ Ceritakan singkat apa yang ada di depan.''';
         }
         AppLogger.info(_tag,
             'Riwayat asisten disimpan: ${_assistantHistory.length} pesan');
+
+        // Simpan ke Supabase
+        SupabaseService().saveAiHistory(
+          mode: payload.mode,
+          prompt: userText,
+          response: aiResponse.description,
+          model: _model,
+        );
       }
 
       return aiResponse;
@@ -357,6 +366,14 @@ Ceritakan singkat apa yang ada di depan.''';
           _chatHistory.removeRange(0, _chatHistory.length - 20);
         }
         _saveChatHistory();
+
+        // Simpan ke Supabase
+        SupabaseService().saveAiHistory(
+          mode: 'obrolan',
+          prompt: userMessage,
+          response: aiResponse.description,
+          model: _model,
+        );
       }
 
       return aiResponse;

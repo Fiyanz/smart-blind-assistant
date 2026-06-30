@@ -53,6 +53,7 @@ dependencies:
   # Optimasi: Kompresi gambar & ML Kit lokal
   flutter_image_compress: ^2.3.0
   google_mlkit_object_detection: ^0.15.0
+  supabase_flutter: ^2.15.1
 
 dev_dependencies:
   flutter_test:
