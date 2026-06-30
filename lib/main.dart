@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'app.dart';
+import 'core/constants/app_constants.dart';
 import 'core/utils/logger.dart';
 import 'core/utils/platform_helper.dart';
 import 'providers/assistant_provider.dart';
@@ -30,6 +32,11 @@ void main() async {
 
   // Load environment variables
   await dotenv.load(fileName: ".env");
+  
+  // Simpan config Supabase ke SharedPreferences agar bisa dibaca di background isolate
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString('SUPABASE_URL', AppConstants.supabaseUrl);
+  await prefs.setString('SUPABASE_ANON_KEY', AppConstants.supabaseAnonKey);
 
   // Inisialisasi Supabase
   await SupabaseService.initialize();

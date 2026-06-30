@@ -69,7 +69,7 @@ class SupabaseService {
         'level': level,
         'tag': tag,
         'message': message,
-        'error_details': ?errorDetails,
+        'error_details': errorDetails,
       });
     } catch (e) {
       // Jangan pakai AppLogger.error di sini untuk menghindari infinite loop 

@@ -291,8 +291,17 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  DateTime? _lastVoiceTriggerTime;
+
   /// Handle tombol voice: mulai/stop recording suara.
   Future<void> _handleVoiceTrigger() async {
+    final now = DateTime.now();
+    if (_lastVoiceTriggerTime != null && now.difference(_lastVoiceTriggerTime!).inMilliseconds < 1000) {
+      AppLogger.warning(_tag, 'Debounce: Tombol voice ditekan terlalu cepat');
+      return;
+    }
+    _lastVoiceTriggerTime = now;
+
     if (_isRecording) {
       await stopVoiceInput();
     } else {
@@ -608,11 +617,7 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Toggle voice input.
   Future<void> toggleVoiceInput() async {
-    if (_isRecording) {
-      await stopVoiceInput();
-    } else {
-      await startVoiceInput();
-    }
+    await _handleVoiceTrigger();
   }
 
   /// Set interval autopilot otomatis.
@@ -729,19 +734,7 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
           }
         }
 
-        // Tambahkan konteks lokasi ke customPrompt jika di mode asisten
         String? finalPrompt = effectivePrompt;
-        if (promptMode == 'asisten' || promptMode == 'custom') {
-           final locationContext = _locationReady && _locationDescription.isNotEmpty 
-              ? 'LOKASI SAAT INI: $_locationDescription.' 
-              : '';
-           
-           if (finalPrompt != null) {
-              finalPrompt = '$locationContext $finalPrompt'.trim();
-           } else if (locationContext.isNotEmpty) {
-              finalPrompt = locationContext;
-           }
-        }
 
         final payload = CapturePayload(
           imagePath: imagePath,

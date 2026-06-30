@@ -253,12 +253,16 @@ Ceritakan singkat apa yang ada di depan.''';
 
       // Buat request body sesuai format OpenRouter/OpenAI
       // Sertakan riwayat asisten (conversation memory) agar AI ingat konteks sebelumnya
-      final systemPrompt = _getSystemPrompt(
+      String systemPrompt = _getSystemPrompt(
         payload.mode,
         customPrompt: payload.mode == 'navigasi'
             ? systemPromptCustom
             : payload.customPrompt,
       );
+
+      if (payload.locationInfo != null && payload.locationInfo!.isNotEmpty) {
+        systemPrompt += '\n\n[INFO LOKASI SAAT INI]\n${payload.locationInfo}\nGunakan informasi lokasi di atas HANYA JIKA relevan dengan pertanyaan atau situasi.';
+      }
 
       final messages = <Map<String, dynamic>>[
         {'role': 'system', 'content': systemPrompt},
