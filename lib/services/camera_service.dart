@@ -63,28 +63,51 @@ class CameraService {
   /// atau `null` jika gagal.
   Future<String?> captureFrame() async {
     if (_controller == null || !_controller!.value.isInitialized) {
-      AppLogger.error(_tag, 'Kamera belum diinisialisasi');
-      return null;
+      AppLogger.warning(_tag, 'Kamera belum siap, mencoba inisialisasi ulang...');
+      final success = await initialize();
+      if (!success) {
+        AppLogger.error(_tag, 'Kamera gagal diinisialisasi ulang');
+        return null;
+      }
+      // Beri sedikit jeda agar sensor kamera siap
+      await Future.delayed(const Duration(milliseconds: 500));
     }
 
     try {
-      // Ambil gambar
-      final XFile image = await _controller!.takePicture();
-
-      // Pindahkan ke temp directory dengan nama unik
-      final tempDir = await getTemporaryDirectory();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final targetPath = '${tempDir.path}/sight_capture_$timestamp.jpg';
-
-      final File targetFile = File(image.path);
-      await targetFile.copy(targetPath);
-
-      AppLogger.info(_tag, 'Gambar disimpan: $targetPath');
-      return targetPath;
+      return await _takeAndSavePicture();
     } catch (e) {
-      AppLogger.error(_tag, 'Gagal mengambil gambar', e);
+      AppLogger.error(_tag, 'Gagal mengambil gambar (kemungkinan layar mati/background), mencoba re-init...', e);
+      
+      // Jika gagal (sering terjadi di Android saat layar mati karena plugin menutup kamera),
+      // kita coba inisialisasi ulang sekali lagi dan ambil gambar.
+      final success = await initialize();
+      if (success) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        try {
+          return await _takeAndSavePicture();
+        } catch (e2) {
+          AppLogger.error(_tag, 'Gagal mengambil gambar setelah re-init', e2);
+          return null;
+        }
+      }
       return null;
     }
+  }
+
+  Future<String?> _takeAndSavePicture() async {
+    // Ambil gambar
+    final XFile image = await _controller!.takePicture();
+
+    // Pindahkan ke temp directory dengan nama unik
+    final tempDir = await getTemporaryDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final targetPath = '${tempDir.path}/sight_capture_$timestamp.jpg';
+
+    final File targetFile = File(image.path);
+    await targetFile.copy(targetPath);
+
+    AppLogger.info(_tag, 'Gambar disimpan: $targetPath');
+    return targetPath;
   }
 
   // ─── Dispose ───────────────────────────────────────────────

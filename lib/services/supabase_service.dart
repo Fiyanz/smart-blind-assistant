@@ -47,7 +47,7 @@ class SupabaseService {
     try {
       await Supabase.initialize(
         url: AppConstants.supabaseUrl,
-        anonKey: AppConstants.supabaseAnonKey, // menggunakan anonKey (akan diganti publishableKey di versi mendatang)
+        publishableKey: AppConstants.supabaseAnonKey,
       );
       AppLogger.info(_tag, 'Supabase berhasil diinisialisasi');
     } catch (e) {
@@ -69,7 +69,7 @@ class SupabaseService {
         'level': level,
         'tag': tag,
         'message': message,
-        if (errorDetails != null) 'error_details': errorDetails,
+        'error_details': ?errorDetails,
       });
     } catch (e) {
       // Jangan pakai AppLogger.error di sini untuk menghindari infinite loop 

@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/constants/app_strings.dart';
@@ -8,6 +11,7 @@ import '../../core/utils/logger.dart';
 import '../../providers/assistant_provider.dart';
 import '../../providers/ble_provider.dart';
 import '../../routes/app_router.dart';
+import '../../services/background_service.dart';
 import 'widgets/assistant_status_indicator.dart';
 import 'widgets/connection_status_card.dart';
 
@@ -27,26 +31,63 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   BleProvider? _bleProvider;
+  AssistantProvider? _assistantProvider;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
     // Inisialisasi assistant provider setelah frame pertama
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       final assistant = context.read<AssistantProvider>();
+      _assistantProvider = assistant;
+      _bleProvider = context.read<BleProvider>();
+
       assistant.initialize();
 
+      // Minta izin notifikasi dulu (Android 13+), lalu start background service
+      await _requestNotificationPermissionAndStartService();
+
+      BackgroundService.updateNotification(
+        content: 'Mode: ${assistant.modeLabel} — ${assistant.statusLabel}',
+      );
+
       // Listen ke perubahan BLE state (termasuk koneksi baru)
-      _bleProvider = context.read<BleProvider>();
       _bleProvider!.addListener(_onBleStateChanged);
+
+      // Listen ke perubahan assistant untuk update notifikasi
+      assistant.addListener(_onAssistantStateChanged);
 
       // Subscribe langsung jika sudah terhubung
       if (_bleProvider!.isConnected) {
         assistant.listenToTrigger(_bleProvider!.triggerStream);
+      } else {
+        // Coba auto-connect saat aplikasi baru dibuka
+        _bleProvider!.autoConnectToLastDevice();
       }
     });
+  }
+
+  /// Dipanggil saat lifecycle app berubah (resume/pause).
+  /// Memastikan background service tetap hidup saat app kembali dari background.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      AppLogger.info('HomeScreen', 'App resumed — memastikan background service aktif');
+      BackgroundService.ensureRunning();
+
+      // Update notifikasi dengan status terbaru
+      final assistant = _assistantProvider;
+      if (assistant != null) {
+        BackgroundService.updateNotification(
+          content: 'Mode: ${assistant.modeLabel} — ${assistant.statusLabel}',
+        );
+      }
+    }
   }
 
   /// Dipanggil setiap kali BleProvider berubah (connect/disconnect).
@@ -59,12 +100,66 @@ class _HomeScreenState extends State<HomeScreen> {
     if (ble.isConnected) {
       assistant.listenToTrigger(ble.triggerStream);
       AppLogger.info('HomeScreen', 'BLE terhubung → trigger stream subscribed');
+
+      // Update notifikasi: BLE terhubung
+      BackgroundService.updateNotification(
+        content: 'ESP32 terhubung — Mode: ${assistant.modeLabel}',
+      );
+
+      // Pastikan background service hidup saat BLE connect
+      BackgroundService.ensureRunning();
+    } else {
+      // Update notifikasi: BLE terputus
+      BackgroundService.updateNotification(
+        content: 'ESP32 terputus — Menunggu koneksi...',
+      );
     }
+  }
+
+  /// Dipanggil setiap kali AssistantProvider berubah.
+  /// Update notifikasi foreground dengan status terbaru.
+  void _onAssistantStateChanged() {
+    final assistant = _assistantProvider;
+    if (assistant == null) return;
+
+    // Update notifikasi dengan status & mode terkini
+    final ble = _bleProvider;
+    final bleStatus = (ble != null && ble.isConnected)
+        ? 'ESP32 ✓'
+        : 'ESP32 ✗';
+
+    BackgroundService.updateNotification(
+      content: '$bleStatus | ${assistant.modeLabel} — ${assistant.statusLabel}',
+    );
+  }
+
+  /// Minta izin notifikasi (Android 13+) lalu start background service.
+  ///
+  /// Pada Android 13+ (API 33), POST_NOTIFICATIONS harus di-grant
+  /// sebelum foreground service bisa menampilkan notifikasi.
+  /// Tanpa izin ini, startForeground() akan crash.
+  Future<void> _requestNotificationPermissionAndStartService() async {
+    if (Platform.isAndroid) {
+      final notifStatus = await Permission.notification.status;
+      if (!notifStatus.isGranted) {
+        AppLogger.info('HomeScreen', 'Meminta izin notifikasi...');
+        final result = await Permission.notification.request();
+        if (!result.isGranted) {
+          AppLogger.warning('HomeScreen', 'Izin notifikasi ditolak — background service tetap dicoba');
+        }
+      }
+    }
+
+    // Start background service (aman meskipun izin notifikasi ditolak pada Android <13)
+    await BackgroundService.start();
+    AppLogger.info('HomeScreen', 'Background service dimulai');
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _bleProvider?.removeListener(_onBleStateChanged);
+    _assistantProvider?.removeListener(_onAssistantStateChanged);
     super.dispose();
   }
 

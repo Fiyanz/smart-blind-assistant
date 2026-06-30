@@ -413,8 +413,12 @@ class AssistantProvider extends ChangeNotifier {
   /// Hentikan TTS dulu agar tidak mengganggu microphone.
   Future<void> startVoiceInput({bool silent = false}) async {
     if (!_sttReady) {
-      await _ttsService.speak(AppStrings.ttsVoiceNotAvailable);
-      return;
+      AppLogger.warning(_tag, 'STT belum siap, mencoba inisialisasi ulang...');
+      _sttReady = await _sttService.initialize();
+      if (!_sttReady) {
+        await _ttsService.speak(AppStrings.ttsVoiceNotAvailable);
+        return;
+      }
     }
 
     // Jangan mulai jika sedang memproses voice input sebelumnya
