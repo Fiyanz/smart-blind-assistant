@@ -104,8 +104,10 @@ class SttService {
           _isListening = false;
         }
       },
+      pauseFor: const Duration(seconds: 10),
       listenOptions: SpeechListenOptions(
         localeId: localeId,
+        listenMode: ListenMode.dictation,
         cancelOnError: false,
         partialResults: true,
       ),

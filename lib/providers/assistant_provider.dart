@@ -482,6 +482,9 @@ class AssistantProvider extends ChangeNotifier {
 
   /// Tunggu sampai TTS benar-benar diam (polling dengan timeout).
   Future<void> _waitForTtsSilence() async {
+    // Beri jeda agar TTS sempat memulai proses bicaranya (agar status isSpeaking = true)
+    await Future.delayed(const Duration(milliseconds: 300));
+
     const maxWait = Duration(seconds: 5);
     const pollInterval = Duration(milliseconds: 100);
     final stopwatch = Stopwatch()..start();
@@ -511,9 +514,14 @@ class AssistantProvider extends ChangeNotifier {
     try {
       switch (_mode) {
         case AssistantMode.asisten:
-          // Mode asisten: ambil gambar + lokasi + kirim dengan prompt
-          await _ttsService.speak(AppStrings.ttsAnalyzing);
-          await executePipeline(promptOverride: text.isNotEmpty ? text : null);
+          // Mode asisten: wajib ada perintah suara. Jika kosong (karena timeout/glitch), batalkan.
+          if (text.isEmpty) {
+            _blockAutoListen = true;
+            await _ttsService.speak(AppStrings.ttsVoiceMuted);
+          } else {
+            await _ttsService.speak(AppStrings.ttsAnalyzing);
+            await executePipeline(promptOverride: text);
+          }
           break;
 
         case AssistantMode.autopilot:
@@ -558,21 +566,29 @@ class AssistantProvider extends ChangeNotifier {
 
   /// Hentikan merekam suara.
   Future<void> stopVoiceInput() async {
+    // Guard: cegah double-stop atau race condition saat ditekan berkali-kali
+    if (!_isRecording) {
+      AppLogger.warning(_tag, 'stopVoiceInput diabaikan — sudah tidak merekam');
+      return;
+    }
+
     _blockAutoListen = true;
+    
+    // Set isRecording ke false lebih awal agar _handleSttStatus mengabaikan event 'notListening'
+    _isRecording = false;
+    if (_status == AssistantStatus.listening) {
+      _setStatus(AssistantStatus.idle);
+    }
+    notifyListeners();
+    AppLogger.info(_tag, 'Voice input dihentikan manual');
+
+    final String capturedText = _voiceText;
+    
     await _sttService.stopListening();
     
-    if (_isRecording) {
-      _isRecording = false;
-      if (_status == AssistantStatus.listening) {
-        _setStatus(AssistantStatus.idle);
-      }
-      notifyListeners();
-      AppLogger.info(_tag, 'Voice input dihentikan manual');
-
-      if (_voiceText.isNotEmpty) {
-        AppLogger.info(_tag, 'Memproses teks yang tertangkap sebelum dihentikan: $_voiceText');
-        _onVoiceInputComplete(_voiceText);
-      }
+    if (capturedText.isNotEmpty) {
+      AppLogger.info(_tag, 'Memproses teks yang tertangkap sebelum dihentikan: $capturedText');
+      _onVoiceInputComplete(capturedText);
     }
   }
 
