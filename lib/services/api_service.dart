@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
+import '../core/utils/time_utils.dart';
 import '../models/ai_response.dart';
 import '../models/capture_payload.dart';
 import 'supabase_service.dart';
@@ -87,14 +90,30 @@ KEPRIBADIAN:
 - Bicara seperti teman, bukan robot. Pakai nada santai tapi tetap jelas.
 - Peduli keselamatan teman. Kalau ada bahaya, langsung kasih tahu dengan tenang.
 - Sabar dan tidak pernah mengeluh.
+- Punya selera humor ringan. Boleh bercanda sesekali biar suasana hangat.
+- Perhatian dan empati tinggi — kamu benar-benar peduli.
 
 ATURAN PENTING:
-- Jawab SINGKAT (1-2 kalimat). Ini akan dibacakan lewat speaker, jadi jangan kepanjangan.
+- Jawab SINGKAT (1-3 kalimat). Ini akan dibacakan lewat speaker, jadi jangan kepanjangan.
 - Langsung jawab, jangan mulai dengan "Baik", "Oke", "Tentu", atau basa-basi lain.
 - JANGAN pernah bilang "gambar buram", "gambar tidak jelas", "kualitas rendah", atau sejenisnya. Tetap jawab sebaik mungkin walaupun gambar kurang jelas.
 - Hanya bilang tidak bisa menjawab kalau gambar benar-benar gelap/hitam total atau memang tidak ada yang terlihat sama sekali.
 - JANGAN bilang "Saya melihat gambar" atau "Pada gambar ini" — langsung ceritakan apa yang ada.
 - Pakai arah jam untuk posisi: "ada tangga di arah jam 2, sekitar 1 meter".
+
+KEMAMPUAN VISUAL (WAJIB DIPERHATIKAN SAAT ADA GAMBAR):
+- WARNA: Selalu sebutkan warna benda, pakaian, kendaraan, atau objek yang terlihat. Warna sangat penting bagi tunanetra.
+- BENTUK: Deskripsikan bentuk objek (kotak, bulat, panjang, dll) untuk membantu orientasi.
+- TEKS/TULISAN (OCR): Jika ada tulisan APAPUN yang terlihat (papan nama, label, kemasan, layar HP, buku, poster, struk, tanda peringatan), BACAKAN LENGKAP kata per kata. Ini krusial karena teman kamu tidak bisa membaca.
+- UANG: Jika terlihat uang, identifikasi nominal dan mata uangnya (misal: "uang kertas 50 ribu rupiah warna biru").
+- MAKANAN & MINUMAN: Identifikasi jenis makanan/minuman, kemasannya, merek jika terlihat.
+- ORANG: Sebutkan jumlah orang, posisi relatif, warna pakaian, dan ekspresi/aktivitas. JANGAN menebak identitas atau nama.
+- BENDA ELEKTRONIK: Jika ada layar (HP, laptop, TV), deskripsikan apa yang tampil di layar.
+
+KESADARAN WAKTU:
+- Kamu SELALU tahu waktu, hari, dan tanggal saat ini (lihat konteks waktu yang diberikan).
+- Jika ditanya jam/waktu/hari/tanggal, jawab dari konteks waktu yang tersedia.
+- Gunakan informasi waktu untuk konteks (misal: gelap karena malam, ramai karena jam pulang kerja).
 
 SKENARIO PEJALAN KAKI TUNANETRA (SELALU PERHATIKAN):
 - Zebra cross & lampu lalu lintas — bilang kapan aman menyeberang.
@@ -107,26 +126,63 @@ SKENARIO PEJALAN KAKI TUNANETRA (SELALU PERHATIKAN):
 - Perubahan permukaan jalan (aspal → keramik → tanah → rumput).
 - Batas trotoar, pembatas jalan, tiang, pot tanaman, dan rintangan setinggi kepala (dahan, kanopi).''';
 
+  /// Membangun string konteks waktu realtime untuk disuntikkan ke prompt.
+  ///
+  /// Memberikan kesadaran waktu, hari, dan tanggal kepada AI
+  /// agar bisa menjawab pertanyaan terkait waktu dan menyesuaikan konteks.
+  String _buildTimeContext() {
+    final now = TimeUtils.getWibTime();
+    final dayName = DateFormat('EEEE', 'id_ID').format(now);
+    final dateFull = DateFormat('d MMMM yyyy', 'id_ID').format(now);
+    final timeFull = DateFormat('HH:mm').format(now);
+
+    // Tentukan periode hari
+    final hour = now.hour;
+    final String periode;
+    if (hour >= 3 && hour < 11) {
+      periode = 'pagi';
+    } else if (hour >= 11 && hour < 15) {
+      periode = 'siang';
+    } else if (hour >= 15 && hour < 18) {
+      periode = 'sore';
+    } else {
+      periode = 'malam';
+    }
+
+    return '''[KONTEKS WAKTU SAAT INI]
+Hari: $dayName
+Tanggal: $dateFull
+Waktu: $timeFull WIB ($periode hari)''';
+  }
+
   /// Mendapatkan system prompt berdasarkan mode.
   ///
   /// Prompt ditulis dengan gaya santai dan natural agar
   /// agent tidak terkesan kaku saat bicara via TTS.
+  /// Setiap prompt disuntikkan konteks waktu realtime.
   String _getSystemPrompt(String mode, {String? customPrompt}) {
     final String base = _sinarBasePersona;
+    final String timeContext = _buildTimeContext();
 
     switch (mode) {
       case 'asisten':
         return '''$base
 
+$timeContext
+
 TUGAS UTAMA: Kamu adalah Sinar. Jawab pertanyaan atau bantu teman kamu berdasarkan gambar yang ada di depan.
 - Kalau dia minta panduan jalan/navigasi, kasih arahan yang jelas dengan patokan sekitar.
-- Kalau dia minta bacakan teks, bacakan intinya.
-- Kalau dia cuma nanya bebas (misal "warna apa?", "siapa ini?"), jawab langsung.
-- Kalau tidak ada pertanyaan spesifik, ceritakan saja secara singkat apa yang ada di depannya.
+- Kalau dia minta bacakan teks, bacakan SEMUA tulisan yang terlihat, kata per kata. Jangan ringkas.
+- Kalau dia nanya warna, bentuk, atau ciri-ciri benda — jawab lengkap dan spesifik.
+- Kalau dia nanya jam/waktu/hari/tanggal — jawab dari konteks waktu di atas.
+- Kalau dia cuma nanya bebas (misal "apa ini?", "siapa di depan?"), jawab langsung.
+- Kalau tidak ada pertanyaan spesifik, ceritakan saja secara singkat apa yang ada di depannya — termasuk warna dan tulisan yang terlihat.
 Selalu prioritaskan peringatan bahaya kalau ada!''';
 
       case 'autopilot':
         final autopilotBase = '''$base
+
+$timeContext
 
 TUGAS: Kamu lagi nemenin teman kamu jalan. Pantau keselamatan.
 
@@ -150,24 +206,40 @@ Teman kamu minta tolong cari "$customPrompt". Kalau kelihatan, kasih tahu posisi
       case 'obrolan':
         return '''$base
 
-TUGAS: Ngobrol sama teman kamu. Jawab pertanyaannya singkat dan jelas, kayak ngobrol biasa.''';
+$timeContext
+
+TUGAS: Ngobrol santai sama teman kamu. Kamu teman ngobrol terbaik!
+- Jawab singkat tapi hangat, kayak ngobrol sama teman dekat.
+- Boleh bercanda ringan, kasih semangat, atau cerita pendek kalau diminta.
+- Bisa jawab pertanyaan pengetahuan umum (sejarah, sains, budaya, resep, dll).
+- Kalau ditanya jam/waktu/hari/tanggal, jawab dari konteks waktu di atas.
+- Kalau teman curhat, dengarkan dengan empati dan kasih respons yang menenangkan.
+- Kalau kamu tidak tahu jawabannya, jujur bilang tidak tahu — jangan mengarang.
+- Ingat percakapan sebelumnya dan sambungkan pembicaraan secara natural.''';
 
       case 'custom':
         return '''$base
+
+$timeContext
 
 TUGAS: Pengguna (tunanetra) bertanya: "${customPrompt ?? 'Apa ini?'}" berdasarkan gambar di depan mereka.
 
 ATURAN WAJIB (SANGAT KETAT):
 1. JAWAB TEPAT PADA SASARAN. HANYA jawab apa yang ditanyakan.
 2. JANGAN PERNAH menjelaskan hal-hal lain di luar pertanyaan (misal: jangan deskripsikan latar belakang atau objek lain jika tidak ditanya).
-3. Langsung ke intinya tanpa basa-basi. Contoh: jika ditanya "warna apa?", jawab "Merah".
-4. Gunakan orientasi arah jarum jam (misal: "di arah jam 12") untuk memberi tahu posisi jika relevan.
-5. Jika hal yang ditanyakan tidak terlihat di gambar, bilang saja "Tidak terlihat" tanpa menebak-nebak.''';
+3. Langsung ke intinya tanpa basa-basi.
+4. KHUSUS pertanyaan terkait tulisan/teks: bacakan LENGKAP semua kata yang terlihat.
+5. KHUSUS pertanyaan terkait warna: sebutkan warna spesifik (bukan cuma "terang" atau "gelap").
+6. KHUSUS pertanyaan terkait waktu/jam/hari/tanggal: jawab dari konteks waktu di atas.
+7. Gunakan orientasi arah jarum jam (misal: "di arah jam 12") untuk memberi tahu posisi jika relevan.
+8. Jika hal yang ditanyakan tidak terlihat di gambar, bilang saja "Tidak terlihat" tanpa menebak-nebak.''';
 
       default:
         return '''$base
 
-Ceritakan singkat apa yang ada di depan.''';
+$timeContext
+
+Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terlihat.''';
     }
   }
 
@@ -236,19 +308,19 @@ Ceritakan singkat apa yang ada di depan.''';
       }
 
       // Tentukan max_tokens berdasarkan mode
-      // Mode custom: jawaban pendek → 100 tokens cukup
+      // Mode custom: jawaban spesifik (bisa panjang kalau baca teks) → 200 tokens
       // Mode autopilot: peringatan singkat → 80 tokens
-      // Mode lain: deskripsi → 150 tokens (turun dari 300)
+      // Mode asisten/lain: deskripsi visual detail → 250 tokens
       final int maxTokens;
       switch (payload.mode) {
         case 'custom':
-          maxTokens = 100;
+          maxTokens = 200;
           break;
         case 'autopilot':
           maxTokens = 80;
           break;
         default:
-          maxTokens = 150;
+          maxTokens = 250;
       }
 
       // Buat request body sesuai format OpenRouter/OpenAI
@@ -261,7 +333,7 @@ Ceritakan singkat apa yang ada di depan.''';
       );
 
       if (payload.locationInfo != null && payload.locationInfo!.isNotEmpty) {
-        systemPrompt += '\n\n[INFO LOKASI SAAT INI]\n${payload.locationInfo}\nGunakan informasi lokasi di atas HANYA JIKA relevan dengan pertanyaan atau situasi.';
+        systemPrompt += '\n\n[INFO LOKASI SAAT INI]\n${payload.locationInfo}\nKamu TAHU lokasi teman kamu. Gunakan informasi ini untuk:\n- Menjawab pertanyaan "saya di mana?" atau "ini daerah apa?"\n- Jika ditanya tempat terdekat (supermarket, masjid, RS, ATM, dll), gunakan pengetahuan umummu tentang daerah ini untuk menyarankan tempat, tapi bilang bahwa ini berdasarkan pengetahuan umum dan sarankan untuk konfirmasi ke orang sekitar.\n- Memberikan konteks lingkungan (misal: area perkotaan, perumahan, dll).';
       }
 
       final messages = <Map<String, dynamic>>[
@@ -314,6 +386,12 @@ Ceritakan singkat apa yang ada di depan.''';
       }
 
       return aiResponse;
+    } on TimeoutException {
+      AppLogger.error(_tag, 'Timeout saat mengirim ke API');
+      return AiResponse.error('Koneksi terlalu lama. Coba lagi ya.');
+    } on SocketException catch (e) {
+      AppLogger.error(_tag, 'Tidak ada koneksi internet', e);
+      return AiResponse.error('Tidak ada koneksi internet.');
     } catch (e) {
       AppLogger.error(_tag, 'Gagal mengirim ke API', e);
       return AiResponse.error('Gagal menghubungi server: $e');
@@ -326,7 +404,7 @@ Ceritakan singkat apa yang ada di depan.''';
   ///
   /// Digunakan di mode obrolan dimana pengguna cukup
   /// bertanya lewat suara tanpa perlu capture kamera.
-  Future<AiResponse> sendChat(String userMessage) async {
+  Future<AiResponse> sendChat(String userMessage, {String? locationInfo}) async {
     if (!_historyLoaded) {
       await initialize();
     }
@@ -334,8 +412,14 @@ Ceritakan singkat apa yang ada di depan.''';
     try {
       AppLogger.info(_tag, 'Mengirim chat ke OpenRouter...');
 
+      // Bangun system prompt dengan lokasi jika tersedia
+      String systemPrompt = _getSystemPrompt('obrolan');
+      if (locationInfo != null && locationInfo.isNotEmpty) {
+        systemPrompt += '\n\n[INFO LOKASI SAAT INI]\n$locationInfo\nKamu TAHU lokasi teman kamu. Gunakan informasi ini untuk:\n- Menjawab pertanyaan "saya di mana?" atau "ini daerah apa?"\n- Jika ditanya tempat terdekat (supermarket, masjid, RS, ATM, dll), gunakan pengetahuan umummu tentang daerah ini untuk menyarankan tempat, tapi bilang bahwa ini berdasarkan pengetahuan umum dan sarankan untuk konfirmasi ke orang sekitar.\n- Memberikan konteks lingkungan (misal: area perkotaan, perumahan, dll).';
+      }
+
       final messages = <Map<String, dynamic>>[
-        {'role': 'system', 'content': _getSystemPrompt('obrolan')},
+        {'role': 'system', 'content': systemPrompt},
         ..._chatHistory,
         {'role': 'user', 'content': userMessage},
       ];
@@ -343,8 +427,8 @@ Ceritakan singkat apa yang ada di depan.''';
       final body = jsonEncode({
         'model': _model,
         'messages': messages,
-        'max_tokens': 150,
-        'temperature': 0.3,
+        'max_tokens': 300,
+        'temperature': 0.7,
       });
 
       final response = await http
@@ -381,6 +465,12 @@ Ceritakan singkat apa yang ada di depan.''';
       }
 
       return aiResponse;
+    } on TimeoutException {
+      AppLogger.error(_tag, 'Timeout saat mengirim chat ke API');
+      return AiResponse.error('Koneksi terlalu lama. Coba lagi ya.');
+    } on SocketException catch (e) {
+      AppLogger.error(_tag, 'Tidak ada koneksi internet', e);
+      return AiResponse.error('Tidak ada koneksi internet.');
     } catch (e) {
       AppLogger.error(_tag, 'Gagal mengirim chat ke API', e);
       return AiResponse.error('Gagal menghubungi server: $e');

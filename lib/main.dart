@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -19,6 +20,9 @@ import 'services/supabase_service.dart';
 /// Entry point aplikasi SightAssist.
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inisialisasi locale Indonesia untuk DateFormat (dibutuhkan oleh konteks waktu AI)
+  await initializeDateFormatting('id_ID', null);
   
   // Mencegah layar mati otomatis agar kamera selalu siap jika ditekan dari BLE
   WakelockPlus.enable();

@@ -883,7 +883,13 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
       // 1. PROCESSING
       _setStatus(AssistantStatus.processing);
 
-      final response = await _apiService.sendChat(userMessage);
+      // Ambil lokasi terbaru agar AI tahu posisi user
+      await updateLocation();
+
+      final response = await _apiService.sendChat(
+        userMessage,
+        locationInfo: _locationDescription,
+      );
       _lastResponse = response;
 
       if (!response.isSuccess) {
