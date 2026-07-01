@@ -9,7 +9,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../core/utils/logger.dart';
 import '../core/utils/platform_helper.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'supabase_service.dart';
 
 /// Service untuk menjalankan proses di background.
@@ -114,14 +113,8 @@ class BackgroundService {
 
     // Inisialisasi env dan Supabase untuk isolate background
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final supabaseUrl = prefs.getString('SUPABASE_URL') ?? '';
-      final supabaseAnonKey = prefs.getString('SUPABASE_ANON_KEY') ?? '';
-      
-      // Inject env var tanpa rootBundle (karena WidgetsFlutterBinding tidak ada di background isolate)
-      dotenv.env['SUPABASE_URL'] = supabaseUrl;
-      dotenv.env['SUPABASE_ANON_KEY'] = supabaseAnonKey;
-      
+      WidgetsFlutterBinding.ensureInitialized();
+      await dotenv.load(fileName: ".env");
       await SupabaseService.initialize();
     } catch (e) {
       debugPrint('Gagal inisialisasi Supabase di background: $e');
