@@ -1,4 +1,7 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/constants/app_constants.dart';
@@ -14,6 +17,9 @@ class SupabaseService {
   SupabaseService._internal();
 
   SupabaseClient? _client;
+  String? _userId;
+
+  String? get userId => _userId;
 
   /// Mengecek apakah Supabase sudah dikonfigurasi dengan benar di .env
   bool get isConfigured =>
@@ -49,7 +55,13 @@ class SupabaseService {
         url: AppConstants.supabaseUrl,
         publishableKey: AppConstants.supabaseAnonKey,
       );
-      AppLogger.info(_tag, 'Supabase berhasil diinisialisasi');
+      final prefs = await SharedPreferences.getInstance();
+      _instance._userId = prefs.getString('user_id');
+      if (_instance._userId == null) {
+        _instance._userId = 'user_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(10000)}';
+        await prefs.setString('user_id', _instance._userId!);
+      }
+      AppLogger.info(_tag, 'Supabase berhasil diinisialisasi (user: ${_instance._userId})');
     } catch (e) {
       AppLogger.error(_tag, 'Gagal menginisialisasi Supabase', e);
     }
@@ -61,16 +73,20 @@ class SupabaseService {
     required String tag,
     required String message,
     String? errorDetails,
+    String? location,
   }) async {
     if (client == null) return;
 
     try {
-      await client!.from('app_logs').insert({
+      final data = {
         'level': level,
         'tag': tag,
         'message': message,
         'error_details': errorDetails,
-      });
+        if (_userId != null) 'user_id': _userId,
+        if (location != null) 'location': location,
+      };
+      await client!.from('app_logs').insert(data);
     } catch (e) {
       // Jangan pakai AppLogger.error di sini untuk menghindari infinite loop 
       // jika error logging yang gagal
@@ -85,6 +101,7 @@ class SupabaseService {
     required String prompt,
     required String response,
     required String model,
+    String? location,
   }) async {
     if (client == null) {
       AppLogger.warning(_tag, 'Gagal menyimpan riwayat AI: Supabase belum terkonfigurasi');
@@ -92,12 +109,15 @@ class SupabaseService {
     }
 
     try {
-      await client!.from('ai_histories').insert({
+      final data = {
         'mode': mode,
         'prompt': prompt,
         'response': response,
         'model': model,
-      });
+        if (_userId != null) 'user_id': _userId,
+        if (location != null) 'location': location,
+      };
+      await client!.from('ai_histories').insert(data);
       AppLogger.info(_tag, 'Riwayat AI berhasil disimpan ke Supabase');
     } catch (e) {
       AppLogger.error(_tag, 'Gagal mengirim riwayat AI ke Supabase', e);

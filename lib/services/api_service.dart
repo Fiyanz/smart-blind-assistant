@@ -382,6 +382,7 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
           prompt: userText,
           response: aiResponse.description,
           model: _model,
+          location: payload.locationInfo,
         );
       }
 
@@ -461,6 +462,7 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
           prompt: userMessage,
           response: aiResponse.description,
           model: _model,
+          location: locationInfo,
         );
       }
 
