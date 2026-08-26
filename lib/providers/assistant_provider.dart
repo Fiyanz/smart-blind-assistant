@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import '../core/constants/app_constants.dart';
@@ -9,6 +10,7 @@ import '../core/utils/logger.dart';
 import '../core/utils/time_utils.dart';
 import '../models/ai_response.dart';
 import '../models/capture_payload.dart';
+import '../services/ai_tools.dart';
 import '../services/api_service.dart';
 import '../services/camera_service.dart';
 import '../services/location_service.dart';
@@ -232,6 +234,73 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
     _locationReady = await _locationService.initialize();
     await _ttsService.initialize();
     await _apiService.initialize();
+
+    // Setup AI Tools Service dengan callbacks ke device actions
+    final toolsService = AiToolsService(
+      locationService: _locationService,
+      onSetTtsSpeed: (speed) async {
+        await _ttsService.setSpeechRate(speed);
+      },
+      onSwitchMode: (mode) {
+        final targetMode = AssistantMode.values.firstWhere(
+          (m) => m.name == mode,
+          orElse: () => AssistantMode.asisten,
+        );
+        if (_mode != targetMode) {
+          _mode = targetMode;
+          _apiService.clearAssistantHistory();
+          notifyListeners();
+        }
+      },
+      onScanObstacles: () async {
+        final imagePath = await _cameraService.captureFrame(
+            isBackground: _isAppInBackground);
+        if (imagePath == null) return 'Gagal mengambil gambar kamera';
+        final payload = CapturePayload(
+          imagePath: imagePath,
+          timestamp: DateTime.now(),
+          mode: 'penghalang',
+          locationInfo: _locationDescription,
+        );
+        final response = await _apiService.analyzeImage(payload);
+        if (response.isSuccess) {
+          _triggerHapticIfHazard(response.description);
+          return response.description;
+        }
+        return response.errorMessage ?? 'Gagal menganalisis gambar';
+      },
+      onReadText: () async {
+        final imagePath = await _cameraService.captureFrame(
+            isBackground: _isAppInBackground);
+        if (imagePath == null) return 'Gagal mengambil gambar kamera';
+        final payload = CapturePayload(
+          imagePath: imagePath,
+          timestamp: DateTime.now(),
+          mode: 'custom',
+          customPrompt: 'Bacakan SEMUA tulisan dan teks yang terlihat di gambar ini, kata per kata. Jangan ringkas.',
+        );
+        final response = await _apiService.analyzeImage(payload);
+        return response.isSuccess
+            ? response.description
+            : (response.errorMessage ?? 'Gagal membaca teks');
+      },
+      onIdentifyMoney: () async {
+        final imagePath = await _cameraService.captureFrame(
+            isBackground: _isAppInBackground);
+        if (imagePath == null) return 'Gagal mengambil gambar kamera';
+        final payload = CapturePayload(
+          imagePath: imagePath,
+          timestamp: DateTime.now(),
+          mode: 'custom',
+          customPrompt: 'Identifikasi nominal uang yang terlihat. Sebutkan warna, nominal, dan mata uangnya.',
+        );
+        final response = await _apiService.analyzeImage(payload);
+        return response.isSuccess
+            ? response.description
+            : (response.errorMessage ?? 'Gagal identifikasi uang');
+      },
+    );
+    _apiService.setToolsService(toolsService);
 
     _ttsService.onSpeechCompleted = _handleTtsCompletion;
     _sttService.onStatusChanged = _handleSttStatus;
@@ -705,6 +774,9 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
           throw Exception(response.errorMessage ?? 'AI error');
         }
 
+        // Haptic alert jika terdeteksi bahaya/penghalang
+        _triggerHapticIfHazard(response.description);
+
         // SPEAKING
         _setStatus(AssistantStatus.speaking);
         // Di mode autopilot, AI akan merespons sesuai _autopilotInstruction
@@ -753,6 +825,9 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
           throw Exception(response.errorMessage ?? 'AI error');
         }
 
+        // Haptic alert jika terdeteksi bahaya/penghalang
+        _triggerHapticIfHazard(response.description);
+
         // 4. SPEAKING
         _setStatus(AssistantStatus.speaking);
         await _ttsService.speak(response.description);
@@ -797,6 +872,102 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
       _isProcessingPipeline = false;
     }
   }
+
+  /// Memicu getaran fisik (haptic feedback) jika AI mendeteksi bahaya / rintangan
+  void _triggerHapticIfHazard(String text) {
+    try {
+      final lower = text.toLowerCase();
+      if (lower.startsWith('bahaya') || lower.contains('bahaya!') || lower.contains('awas')) {
+        HapticFeedback.heavyImpact();
+        Future.delayed(const Duration(milliseconds: 150), () => HapticFeedback.heavyImpact());
+      } else if (lower.startsWith('hati-hati') || lower.contains('hati-hati')) {
+        HapticFeedback.mediumImpact();
+      }
+    } catch (e) {
+      AppLogger.warning(_tag, 'Haptic feedback tidak tersedia pada platform ini: $e');
+    }
+  }
+
+  // ─── Obstacle Detection Pipeline ──────────────────────────
+
+  /// Eksekusi pemindaian cepat khusus deteksi rintangan / penghalang jalan.
+  ///
+  /// Mengambil frame kamera dan meminta AI memindai penghalang dengan
+  /// posisi arah jarum jam dan estimasi jarak langkah.
+  Future<void> scanObstacles({String? voicePrompt}) async {
+    if (_status != AssistantStatus.idle &&
+        _status != AssistantStatus.autopiloting &&
+        _status != AssistantStatus.listening) {
+      AppLogger.warning(_tag, 'Scan penghalang diabaikan — status: $_status');
+      return;
+    }
+
+    if (_isProcessingPipeline) {
+      AppLogger.warning(_tag, 'Scan penghalang diabaikan — proses lain sedang berjalan');
+      return;
+    }
+    _isProcessingPipeline = true;
+
+    final wasAutopiloting = _status == AssistantStatus.autopiloting;
+
+    try {
+      _setStatus(AssistantStatus.capturing);
+      await _ttsService.speak(AppStrings.ttsObstacleScanning);
+
+      final imagePath = await _cameraService.captureFrame(isBackground: _isAppInBackground);
+      if (imagePath == null) {
+        throw Exception('Gagal mengambil gambar kamera');
+      }
+
+      _setStatus(AssistantStatus.uploading);
+      await updateLocation();
+
+      final payload = CapturePayload(
+        imagePath: imagePath,
+        timestamp: DateTime.now(),
+        mode: 'penghalang',
+        customPrompt: voicePrompt,
+        locationInfo: _locationDescription,
+      );
+
+      _setStatus(AssistantStatus.processing);
+      final response = await _apiService.analyzeImage(payload);
+      _lastResponse = response;
+
+      if (!response.isSuccess) {
+        throw Exception(response.errorMessage ?? 'AI error');
+      }
+
+      // Haptic alert jika ada bahaya
+      _triggerHapticIfHazard(response.description);
+
+      _setStatus(AssistantStatus.speaking);
+      await _ttsService.speak(response.description);
+
+      if (wasAutopiloting) {
+        _setStatus(AssistantStatus.autopiloting);
+      } else {
+        _setStatus(AssistantStatus.idle);
+      }
+      AppLogger.info(_tag, 'Scan penghalang selesai');
+    } catch (e) {
+      AppLogger.error(_tag, 'Scan penghalang error', e);
+      _errorMessage = e.toString();
+      _setStatus(AssistantStatus.error);
+
+      await _ttsService.speak(AppStrings.ttsError);
+
+      await Future.delayed(const Duration(seconds: 2));
+      if (wasAutopiloting) {
+        _setStatus(AssistantStatus.autopiloting);
+      } else {
+        _setStatus(AssistantStatus.idle);
+      }
+    } finally {
+      _isProcessingPipeline = false;
+    }
+  }
+
   // ─── Navigation Pipeline ──────────────────────────────────────
 
   /// Eksekusi pipeline navigasi:
@@ -846,6 +1017,9 @@ class AssistantProvider extends ChangeNotifier with WidgetsBindingObserver {
       if (!response.isSuccess) {
         throw Exception(response.errorMessage ?? 'AI error');
       }
+
+      // Haptic alert jika terdeteksi bahaya
+      _triggerHapticIfHazard(response.description);
 
       // 4. SPEAKING
       _setStatus(AssistantStatus.speaking);

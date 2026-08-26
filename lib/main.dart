@@ -27,10 +27,13 @@ void main() async {
   // Mencegah layar mati otomatis agar kamera selalu siap jika ditekan dari BLE
   WakelockPlus.enable();
 
-  // Kunci orientasi ke portrait (hanya di mobile)
+  // Izinkan orientasi dinamis portrait dan landscape (hanya di mobile)
   if (PlatformHelper.isMobile) {
     await SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
     ]);
   }
 

@@ -83,8 +83,8 @@ class SupabaseService {
         'tag': tag,
         'message': message,
         'error_details': errorDetails,
-        if (_userId != null) 'user_id': _userId,
-        if (location != null) 'location': location,
+        'user_id': ?_userId,
+        'location': ?location,
       };
       await client!.from('app_logs').insert(data);
     } catch (e) {
@@ -114,8 +114,8 @@ class SupabaseService {
         'prompt': prompt,
         'response': response,
         'model': model,
-        if (_userId != null) 'user_id': _userId,
-        if (location != null) 'location': location,
+        'user_id': ?_userId,
+        'location': ?location,
       };
       await client!.from('ai_histories').insert(data);
       AppLogger.info(_tag, 'Riwayat AI berhasil disimpan ke Supabase');

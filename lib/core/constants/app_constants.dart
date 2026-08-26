@@ -35,17 +35,25 @@ class AppConstants {
       'https://openrouter.ai/api/v1/chat/completions';
 
   /// API Key OpenRouter
-  static String get openRouterApiKey => dotenv.env['OPENROUTER_API_KEY'] ?? '';
+  static String get openRouterApiKey =>
+      dotenv.isInitialized ? (dotenv.env['OPENROUTER_API_KEY'] ?? '') : '';
 
   /// Model AI yang digunakan (Gemini Vision via OpenRouter)
   static const String aiModel = 'google/gemini-2.5-flash';
 
+  // ─── Maps (OpenFreeMap) ────────────────────────────────────
+  /// Style URL OpenFreeMap (Liberty style — gratis, open source, tanpa API key)
+  static const String openFreeMapLibertyStyle =
+      'https://tiles.openfreemap.org/styles/liberty';
+
   // ─── Supabase ──────────────────────────────────────────────
   /// URL Supabase
-  static String get supabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
+  static String get supabaseUrl =>
+      dotenv.isInitialized ? (dotenv.env['SUPABASE_URL'] ?? '') : '';
 
   /// Anon Key Supabase
-  static String get supabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
+  static String get supabaseAnonKey =>
+      dotenv.isInitialized ? (dotenv.env['SUPABASE_ANON_KEY'] ?? '') : '';
 
   // ─── Kamera ────────────────────────────────────────────────
   /// Resolusi kamera yang digunakan

@@ -67,6 +67,11 @@ class AppStrings {
   static const String ttsUnknownCommand = 'Perintah tidak dikenali.';
   static const String ttsVoiceCancelled = 'Perintah dibatalkan karena tidak ada suara.';
   static const String ttsVoiceMuted = 'Sepertinya tidak ada suara. Mic saya matikan sementara.';
+  static const String ttsObstacleScanning = 'Sedang memindai penghalang di depanmu...';
+  static const String ttsObstacleSafe = 'Jalur di depan aman dan terbuka.';
+  static const String ttsToolExecuting = 'Sebentar ya, aku lagi proses...';
+  static const String ttsTtsSpeedChanged = 'Oke, kecepatan bicara sudah diubah.';
+  static const String ttsModeChangedByAi = 'Oke, mode sudah diganti.';
 
   // ─── Halaman ───────────────────────────────────────────────
   static const String homeTitle = 'Beranda';

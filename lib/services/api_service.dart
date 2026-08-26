@@ -4,21 +4,20 @@ import 'dart:io';
 
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
-import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/utils/logger.dart';
-import '../core/utils/time_utils.dart';
 import '../models/ai_response.dart';
 import '../models/capture_payload.dart';
+import 'ai_tools.dart';
 import 'supabase_service.dart';
 
 /// Service untuk komunikasi dengan OpenRouter API.
 ///
-/// Mengirimkan gambar ke Vision Language Model (Gemini)
-/// melalui OpenRouter dan mengembalikan deskripsi teks.
-/// Juga mendukung mode obrolan (text-only, tanpa gambar).
+/// Mengirimkan gambar dan teks ke Vision Language Model (Gemini via OpenRouter)
+/// dan mengembalikan deskripsi teks. Mendukung function calling tools
+/// untuk aksi nyata di perangkat.
 class ApiService {
   static const String _tag = 'ApiService';
 
@@ -28,6 +27,9 @@ class ApiService {
   /// Model AI yang digunakan
   String _model = AppConstants.aiModel;
 
+  /// Referensi ke AI tools service
+  AiToolsService? _toolsService;
+
   /// Memori riwayat obrolan untuk mode Obrolan
   final List<Map<String, dynamic>> _chatHistory = [];
   bool _historyLoaded = false;
@@ -35,6 +37,9 @@ class ApiService {
   /// Memori riwayat untuk mode Asisten (konteks visual multi-turn)
   /// Menyimpan 3 interaksi terakhir agar AI ingat percakapan sebelumnya.
   final List<Map<String, dynamic>> _assistantHistory = [];
+
+  /// Maksimal iterasi tool calling loop (keamanan)
+  static const int _maxToolCallIterations = 3;
 
   /// Inisialisasi API service (memuat riwayat chat dari lokal)
   Future<void> initialize() async {
@@ -81,108 +86,95 @@ class ApiService {
     AppLogger.info(_tag, 'Model diubah ke: $model');
   }
 
+  /// Set referensi ke AI tools service
+  void setToolsService(AiToolsService toolsService) {
+    _toolsService = toolsService;
+    AppLogger.info(_tag, 'Tools service terpasang');
+  }
+
   // ─── Prompt Templates ──────────────────────────────────────
 
   static const String _sinarBasePersona =
-      '''Kamu adalah Sinar, sahabat setia penyandang tunanetra. Kamu berbicara seperti teman dekat yang perhatian — hangat, santai, dan penuh empati. Gunakan bahasa Indonesia sehari-hari yang natural.
+      '''Kamu adalah Sinar, sahabat dan asisten pribadi tunanetra. Kamu berbicara seperti sahabat dekat yang setia, perhatian, hangat, dan observan. Gunakan bahasa Indonesia sehari-hari yang santai, luwes, dan menyenangkan.
 
-KEPRIBADIAN:
-- Bicara seperti teman, bukan robot. Pakai nada santai tapi tetap jelas.
-- Peduli keselamatan teman. Kalau ada bahaya, langsung kasih tahu dengan tenang.
-- Sabar dan tidak pernah mengeluh.
-- Punya selera humor ringan. Boleh bercanda sesekali biar suasana hangat.
-- Perhatian dan empati tinggi — kamu benar-benar peduli.
+PERAN & KEPRIBADIAN:
+- Kamu adalah mata dan teman bicara bagi temanmu. Kamu hadir untuk menemani, membantu melihat dunia, dan menjaga keselamatannya.
+- Bersikaplah ramah dan ekspresif seperti sahabat sejati, bukan mesin kaku atau robot pemindai.
+- Pandai mengamati detail lingkungan (cahaya, suasana, cuaca, kerapian, warna, suasana hati).
+- Tanggap, solutif, dan tidak pernah berbelit-belit.
 
-ATURAN PENTING:
-- Jawab SINGKAT (1-3 kalimat). Ini akan dibacakan lewat speaker, jadi jangan kepanjangan.
-- Langsung jawab, jangan mulai dengan "Baik", "Oke", "Tentu", atau basa-basi lain.
-- JANGAN pernah bilang "gambar buram", "gambar tidak jelas", "kualitas rendah", atau sejenisnya. Tetap jawab sebaik mungkin walaupun gambar kurang jelas.
-- Hanya bilang tidak bisa menjawab kalau gambar benar-benar gelap/hitam total atau memang tidak ada yang terlihat sama sekali.
-- JANGAN bilang "Saya melihat gambar" atau "Pada gambar ini" — langsung ceritakan apa yang ada.
-- Pakai arah jam untuk posisi: "ada tangga di arah jam 2, sekitar 1 meter".
+CARA MENJAWAB PERTANYAAN (PERSONAL & TEPAT SASARAN):
+- JAWAB LANGSUNG apa yang ditanyakan temanmu dengan nada bersahabat.
+- Contoh pertanyaan sehari-hari:
+  * "Pagi ini cerah ya?" / "Di luar terang gak?":
+    -> Amati pencahayaan di gambar dan kondisi sekitar. Jawab hangat: "Iya, pagi ini cerah banget! Cahaya matahari kelihatan terang masuk ke ruangan, suasananya segar."
+  * "Menurut kamu di depan ada apa?" / "Ada penghalang gak?":
+    -> Amati jalur jalan. Jawab secara personal dan jelas: "Di depanmu jalur jalan aman kok. Cuma ada meja kecil di sebelah kanan arah jam 2, jadi kamu bisa jalan lurus tanpa khawatir."
+  * "Apakah kondisi berantakan?":
+    -> Jawab jujur dan ramah: "Iya, kelihatannya agak berantakan nih. Ada baju dan beberapa barang di kasur sama lantai." atau "Ruanganmu rapi dan bersih kok."
+  * "Baju yang aku pegang warna apa?":
+    -> Jawab spesifik: "Baju yang kamu pegang warnanya biru dongker polos."
+  * "Buka GPS dong" / "Cek lokasi":
+    -> Panggil tool open_gps / get_current_location lalu jawab: "Oke, aku bantu buka pengaturan GPS di HP kamu ya."
+- DILARANG KERAS mengabsen atau membacakan daftar barang yang tidak ditanyakan (misal jangan sebut "ada kasur, bantal, laptop, meja" jika temanmu hanya bertanya apakah cerah atau apakah berantakan).
 
-KEMAMPUAN VISUAL (WAJIB DIPERHATIKAN SAAT ADA GAMBAR):
-- WARNA: Selalu sebutkan warna benda, pakaian, kendaraan, atau objek yang terlihat. Warna sangat penting bagi tunanetra.
-- BENTUK: Deskripsikan bentuk objek (kotak, bulat, panjang, dll) untuk membantu orientasi.
-- TEKS/TULISAN (OCR): Jika ada tulisan APAPUN yang terlihat (papan nama, label, kemasan, layar HP, buku, poster, struk, tanda peringatan), BACAKAN LENGKAP kata per kata. Ini krusial karena teman kamu tidak bisa membaca.
-- UANG: Jika terlihat uang, identifikasi nominal dan mata uangnya (misal: "uang kertas 50 ribu rupiah warna biru").
-- MAKANAN & MINUMAN: Identifikasi jenis makanan/minuman, kemasannya, merek jika terlihat.
-- ORANG: Sebutkan jumlah orang, posisi relatif, warna pakaian, dan ekspresi/aktivitas. JANGAN menebak identitas atau nama.
-- BENDA ELEKTRONIK: Jika ada layar (HP, laptop, TV), deskripsikan apa yang tampil di layar.
+ATURAN FORMAT & KESELAMATAN:
+- Jawab SINGKAT dan NATURAL (1-3 kalimat) agar nyaman didengar lewat suara TTS.
+- JANGAN pernah menggunakan frasa kaku seperti "Pada gambar ini", "Saya melihat gambar", atau "Gambar buram". Langsung ceritakan apa yang kamu lihat.
+- Gunakan orientasi arah jam ("arah jam 12", "arah jam 3") dan perkiraan jarak langkah/meter untuk posisi benda.
+- PRIORITAS BAHAYA: Jika ada bahaya langsung di jalur jalan (lubang, tangga curam, kendaraan melintas, dahan rendah setinggi kepala), beri tahu dengan segera dan jelas.
 
-KESADARAN WAKTU:
-- Kamu SELALU tahu waktu, hari, dan tanggal saat ini (lihat konteks waktu yang diberikan).
-- Jika ditanya jam/waktu/hari/tanggal, jawab dari konteks waktu yang tersedia.
-- Gunakan informasi waktu untuk konteks (misal: gelap karena malam, ramai karena jam pulang kerja).
+TOOLS YANG TERSEDIA:
+Kamu punya akses ke tools function calling:
+- open_gps: untuk membuka pengaturan lokasi/GPS di HP pengguna
+- get_current_time: untuk waktu/hari/tanggal WIB
+- get_current_location: untuk posisi GPS dan alamat jalan pengguna
+- get_nearby_places: untuk mencari tempat terdekat (masjid, ATM, minimarket, dll) dari OpenStreetMap
+- get_weather: untuk info suhu dan kondisi cuaca
+- set_tts_speed: untuk mengubah kecepatan suara bicara
+- scan_obstacles: untuk memindai rintangan di depan
+- read_text_from_image: untuk membaca tulisan dari kamera
+- identify_money: untuk identifikasi uang
+- switch_mode: untuk mengganti mode asisten
 
-SKENARIO PEJALAN KAKI TUNANETRA (SELALU PERHATIKAN):
-- Zebra cross & lampu lalu lintas — bilang kapan aman menyeberang.
-- Trotoar rusak, lubang, genangan air, permukaan tidak rata.
-- Tangga naik/turun — sebutkan kira-kira berapa anak tangga kalau kelihatan.
-- Pintu — terbuka/tertutup, dorong/tarik, posisi gagang.
-- Tanda/tulisan penting — nama toko, petunjuk arah, peringatan.
-- Orang yang mungkin bisa dimintai bantuan (petugas, satpam, dll).
-- Kendaraan yang mendekat dari arah manapun.
-- Perubahan permukaan jalan (aspal → keramik → tanah → rumput).
-- Batas trotoar, pembatas jalan, tiang, pot tanaman, dan rintangan setinggi kepala (dahan, kanopi).''';
+ALUR BERPIKIR RE-ACT (REASON + ACT):
+1. Pikirkan apa yang dibutuhkan pengguna sebelum mengeksekusi.
+2. Jika butuh data nyata (waktu, lokasi, tempat sekitar, cuaca, kontrol GPS), panggil tool yang relevan.
+3. Kamu bisa memanggil beberapa tool berurutan jika pertanyaannya membutuhkan lebih dari satu data.
+4. Rangkum seluruh hasil observasi dari tool menjadi satu jawaban akhir yang utuh dan mengalir.
 
-  /// Membangun string konteks waktu realtime untuk disuntikkan ke prompt.
-  ///
-  /// Memberikan kesadaran waktu, hari, dan tanggal kepada AI
-  /// agar bisa menjawab pertanyaan terkait waktu dan menyesuaikan konteks.
-  String _buildTimeContext() {
-    final now = TimeUtils.getWibTime();
-    final dayName = DateFormat('EEEE', 'id_ID').format(now);
-    final dateFull = DateFormat('d MMMM yyyy', 'id_ID').format(now);
-    final timeFull = DateFormat('HH:mm').format(now);
-
-    // Tentukan periode hari
-    final hour = now.hour;
-    final String periode;
-    if (hour >= 3 && hour < 11) {
-      periode = 'pagi';
-    } else if (hour >= 11 && hour < 15) {
-      periode = 'siang';
-    } else if (hour >= 15 && hour < 18) {
-      periode = 'sore';
-    } else {
-      periode = 'malam';
-    }
-
-    return '''[KONTEKS WAKTU SAAT INI]
-Hari: $dayName
-Tanggal: $dateFull
-Waktu: $timeFull WIB ($periode hari)''';
-  }
+PENANGANAN FALLBACK & ERROR (NATURAL):
+- Jika suatu tool gagal atau mengembalikan pesan error (misal GPS mati atau data tidak ditemukan), JANGAN sebutkan kode teknis atau format JSON ke pengguna.
+- Tanggapi dengan tenang, ramah, dan solutif. Contoh: "Sepertinya sinyal GPS belum dapat posisi yang pas nih. Coba nyalakan lokasi di HP ya." atau "Aku belum menemukan tempat itu di sekitar sini."''';
 
   /// Mendapatkan system prompt berdasarkan mode.
-  ///
-  /// Prompt ditulis dengan gaya santai dan natural agar
-  /// agent tidak terkesan kaku saat bicara via TTS.
-  /// Setiap prompt disuntikkan konteks waktu realtime.
   String _getSystemPrompt(String mode, {String? customPrompt}) {
     final String base = _sinarBasePersona;
-    final String timeContext = _buildTimeContext();
 
     switch (mode) {
       case 'asisten':
+        if (customPrompt != null && customPrompt.isNotEmpty) {
+          return '''$base
+
+PERTANYAAN PENGGUNA: "$customPrompt"
+
+TUGAS UTAMA: Jawab LANGSUNG dan HANYA pertanyaan pengguna di atas.
+- Fokus 100% pada apa yang ditanyakan.
+- JANGAN mengabsen atau mendeskripsikan barang-barang lain di sekitar jika tidak relevan dengan pertanyaan.
+- Jika pengguna bertanya kondisi ruangan (misal: "apakah berantakan?"): Jawab tegas apakah berantakan atau rapi beserta alasan singkat.
+- Jika ditanya penghalang: Jawab apakah ada penghalang di jalur jalan.
+- Jawab singkat dalam 1-3 kalimat natural.''';
+        }
+
         return '''$base
 
-$timeContext
-
-TUGAS UTAMA: Kamu adalah Sinar. Jawab pertanyaan atau bantu teman kamu berdasarkan gambar yang ada di depan.
-- Kalau dia minta panduan jalan/navigasi, kasih arahan yang jelas dengan patokan sekitar.
-- Kalau dia minta bacakan teks, bacakan SEMUA tulisan yang terlihat, kata per kata. Jangan ringkas.
-- Kalau dia nanya warna, bentuk, atau ciri-ciri benda — jawab lengkap dan spesifik.
-- Kalau dia nanya jam/waktu/hari/tanggal — jawab dari konteks waktu di atas.
-- Kalau dia cuma nanya bebas (misal "apa ini?", "siapa di depan?"), jawab langsung.
-- Kalau tidak ada pertanyaan spesifik, ceritakan saja secara singkat apa yang ada di depannya — termasuk warna dan tulisan yang terlihat.
-Selalu prioritaskan peringatan bahaya kalau ada!''';
+TUGAS UTAMA: Pengguna ingin tahu situasi di depannya.
+- Ceritakan secara singkat objek utama dan situasi di depan (termasuk warna dan tulisan penting jika ada).
+- Jika ada penghalang di jalur jalan, utamakan keselamatan dengan memberi tahu posisi arah jam dan jaraknya.
+- Jawab dalam 1-3 kalimat singkat.''';
 
       case 'autopilot':
         final autopilotBase = '''$base
-
-$timeContext
 
 TUGAS: Kamu lagi nemenin teman kamu jalan. Pantau keselamatan.
 
@@ -206,41 +198,62 @@ Teman kamu minta tolong cari "$customPrompt". Kalau kelihatan, kasih tahu posisi
       case 'obrolan':
         return '''$base
 
-$timeContext
-
 TUGAS: Ngobrol santai sama teman kamu. Kamu teman ngobrol terbaik!
 - Jawab singkat tapi hangat, kayak ngobrol sama teman dekat.
 - Boleh bercanda ringan, kasih semangat, atau cerita pendek kalau diminta.
 - Bisa jawab pertanyaan pengetahuan umum (sejarah, sains, budaya, resep, dll).
-- Kalau ditanya jam/waktu/hari/tanggal, jawab dari konteks waktu di atas.
+- Kalau ditanya jam/waktu/hari/tanggal, panggil tool get_current_time.
+- Kalau ditanya lokasi atau tempat terdekat, panggil tool yang sesuai.
 - Kalau teman curhat, dengarkan dengan empati dan kasih respons yang menenangkan.
 - Kalau kamu tidak tahu jawabannya, jujur bilang tidak tahu — jangan mengarang.
 - Ingat percakapan sebelumnya dan sambungkan pembicaraan secara natural.''';
 
+      case 'penghalang':
+        final questionPrefix = (customPrompt != null && customPrompt.isNotEmpty)
+            ? 'PERTANYAAN PENGGUNA: "$customPrompt"\n\n'
+            : '';
+        return '''$base
+
+${questionPrefix}TUGAS UTAMA: JAWAB PERTANYAAN TENTANG PENGHALANG & KESELAMATAN JALUR JALAN.
+- Jawab LANGSUNG apakah ada rintangan yang menghalangi jalan pengguna.
+- Jika ada rintangan di jalur jalan (orang, kendaraan, tiang, pot, lubang, genangan, tangga, kabel, dahan rendah):
+  Sebutkan objek, posisi arah jam, dan estimasi jarak langkah/meter. Berikan instruksi hindar yang jelas jika perlu.
+- Jika jalur aman/bersih: Jawab "Aman, tidak ada penghalang di depanmu. Jalur terbuka."
+- JANGAN menyebutkan barang-barang sekeliling yang tidak menghalangi jalur jalan jika tidak ditanyakan.''';
+
       case 'custom':
         return '''$base
 
-$timeContext
+PERTANYAAN PENGGUNA: "${customPrompt ?? 'Apa ini?'}"
 
-TUGAS: Pengguna (tunanetra) bertanya: "${customPrompt ?? 'Apa ini?'}" berdasarkan gambar di depan mereka.
-
-ATURAN WAJIB (SANGAT KETAT):
-1. JAWAB TEPAT PADA SASARAN. HANYA jawab apa yang ditanyakan.
-2. JANGAN PERNAH menjelaskan hal-hal lain di luar pertanyaan (misal: jangan deskripsikan latar belakang atau objek lain jika tidak ditanya).
-3. Langsung ke intinya tanpa basa-basi.
+ATURAN MUTLAK (SANGAT KETAT):
+1. JAWAB HANYA DAN TEPAT PADA SASARAN PERTANYAAN: "${customPrompt ?? ''}".
+2. DILARANG KERAS mengabsen atau menyebutkan daftar barang di sekitar yang tidak ditanyakan (misal jangan sebut kasur, bantal, laptop, meja jika pengguna bertanya "apakah berantakan?").
+3. Berikan jawaban langsung, to-the-point, dan informatif (1-3 kalimat).
+   - Contoh: Jika ditanya "apakah kondisi berantakan?": Jawab "Iya, kondisinya cukup berantakan, ada barang dan baju berserakan di kasur dan lantai." atau "Tidak, kondisi ruangan rapi."
+   - Contoh: Jika ditanya "apakah ada orang?": Jawab "Ada satu orang di arah jam 12 sekitar 2 meter." atau "Tidak ada orang."
 4. KHUSUS pertanyaan terkait tulisan/teks: bacakan LENGKAP semua kata yang terlihat.
-5. KHUSUS pertanyaan terkait warna: sebutkan warna spesifik (bukan cuma "terang" atau "gelap").
-6. KHUSUS pertanyaan terkait waktu/jam/hari/tanggal: jawab dari konteks waktu di atas.
-7. Gunakan orientasi arah jarum jam (misal: "di arah jam 12") untuk memberi tahu posisi jika relevan.
-8. Jika hal yang ditanyakan tidak terlihat di gambar, bilang saja "Tidak terlihat" tanpa menebak-nebak.''';
+5. KHUSUS pertanyaan terkait warna: sebutkan warna spesifik.
+6. KHUSUS pertanyaan terkait waktu/jam/hari/tanggal: panggil tool get_current_time.
+7. Jika hal yang ditanyakan tidak terlihat di gambar, bilang "Tidak terlihat di depanmu."''';
 
       default:
         return '''$base
 
-$timeContext
-
-Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terlihat.''';
+Ceritakan singkat apa yang ada di depan secara ringkas.''';
     }
+  }
+
+  // ─── Headers & Helpers ─────────────────────────────────────
+
+  /// Build HTTP headers untuk OpenRouter API.
+  Map<String, String> _buildHeaders() {
+    return {
+      'Authorization': 'Bearer $_apiKey',
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://sightassist.app',
+      'X-Title': 'SightAssist',
+    };
   }
 
   // ─── Send Image to OpenRouter ──────────────────────────────
@@ -277,11 +290,10 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
       final base64Image = base64Encode(compressedBytes);
 
       // Buat user message content
-      // Untuk mode custom: pertanyaan user di-embed sebagai instruksi langsung
-      // Untuk mode lain: instruksi generik
       final String userText;
       if (payload.mode == 'custom' && payload.customPrompt?.isNotEmpty == true) {
-        userText = 'PERTANYAAN PENGGUNA: "${payload.customPrompt}". Jawab HANYA pertanyaan ini dengan SPESIFIK dan SINGKAT sesuai panduan.';
+        userText =
+            'PERTANYAAN PENGGUNA: "${payload.customPrompt}". Jawab HANYA pertanyaan ini dengan SPESIFIK dan SINGKAT sesuai panduan.';
       } else if (payload.customPrompt?.isNotEmpty == true) {
         userText = payload.customPrompt!;
       } else {
@@ -299,7 +311,7 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
         },
       ];
 
-      // Untuk mode navigasi, tambahkan info lokasi
+      // Build system prompt
       final String systemPromptCustom;
       if (payload.mode == 'navigasi') {
         systemPromptCustom = payload.locationInfo ?? '';
@@ -307,10 +319,19 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
         systemPromptCustom = payload.customPrompt ?? '';
       }
 
+      String systemPrompt = _getSystemPrompt(
+        payload.mode,
+        customPrompt: payload.mode == 'navigasi'
+            ? systemPromptCustom
+            : payload.customPrompt,
+      );
+
+      if (payload.locationInfo != null && payload.locationInfo!.isNotEmpty) {
+        systemPrompt +=
+            '\n\n[INFO LOKASI SAAT INI]\n${payload.locationInfo}\nKamu TAHU lokasi teman kamu. Gunakan informasi ini untuk:\n- Menjawab pertanyaan "saya di mana?" atau "ini daerah apa?"\n- Jika ditanya tempat terdekat (supermarket, masjid, RS, ATM, dll), gunakan pengetahuan umummu tentang daerah ini untuk menyarankan tempat, tapi bilang bahwa ini berdasarkan pengetahuan umum dan sarankan untuk konfirmasi ke orang sekitar.\n- Memberikan konteks lingkungan (misal: area perkotaan, perumahan, dll).';
+      }
+
       // Tentukan max_tokens berdasarkan mode
-      // Mode custom: jawaban spesifik (bisa panjang kalau baca teks) → 200 tokens
-      // Mode autopilot: peringatan singkat → 80 tokens
-      // Mode asisten/lain: deskripsi visual detail → 250 tokens
       final int maxTokens;
       switch (payload.mode) {
         case 'custom':
@@ -323,44 +344,29 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
           maxTokens = 250;
       }
 
-      // Buat request body sesuai format OpenRouter/OpenAI
-      // Sertakan riwayat asisten (conversation memory) agar AI ingat konteks sebelumnya
-      String systemPrompt = _getSystemPrompt(
-        payload.mode,
-        customPrompt: payload.mode == 'navigasi'
-            ? systemPromptCustom
-            : payload.customPrompt,
-      );
-
-      if (payload.locationInfo != null && payload.locationInfo!.isNotEmpty) {
-        systemPrompt += '\n\n[INFO LOKASI SAAT INI]\n${payload.locationInfo}\nKamu TAHU lokasi teman kamu. Gunakan informasi ini untuk:\n- Menjawab pertanyaan "saya di mana?" atau "ini daerah apa?"\n- Jika ditanya tempat terdekat (supermarket, masjid, RS, ATM, dll), gunakan pengetahuan umummu tentang daerah ini untuk menyarankan tempat, tapi bilang bahwa ini berdasarkan pengetahuan umum dan sarankan untuk konfirmasi ke orang sekitar.\n- Memberikan konteks lingkungan (misal: area perkotaan, perumahan, dll).';
-      }
-
       final messages = <Map<String, dynamic>>[
         {'role': 'system', 'content': systemPrompt},
-        // Tambahkan riwayat percakapan asisten (maks 3 interaksi = 6 pesan)
-        // agar AI ingat gambar & pertanyaan sebelumnya
         ..._assistantHistory,
         {'role': 'user', 'content': userContent},
       ];
 
-      final body = jsonEncode({
+      final body = <String, dynamic>{
         'model': _model,
         'messages': messages,
         'max_tokens': maxTokens,
         'temperature': 0.3,
-      });
+      };
 
-      // Kirim HTTP POST request
-      final response = await http
-          .post(
-            Uri.parse(AppConstants.openRouterBaseUrl),
-            headers: _buildHeaders(),
-            body: body,
-          )
-          .timeout(Duration(seconds: AppConstants.httpTimeoutSeconds));
+      // Tambahkan tools hanya jika bukan autopilot/penghalang
+      final enableTools =
+          _toolsService != null &&
+          payload.mode != 'autopilot' &&
+          payload.mode != 'penghalang';
+      if (enableTools) {
+        body['tools'] = _toolsService!.getToolDeclarations();
+      }
 
-      final aiResponse = _parseResponse(response);
+      final aiResponse = await _sendOpenRouterRequest(body, enableTools: enableTools);
 
       // Simpan ke riwayat asisten untuk conversation memory
       if (aiResponse.isSuccess) {
@@ -405,7 +411,8 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
   ///
   /// Digunakan di mode obrolan dimana pengguna cukup
   /// bertanya lewat suara tanpa perlu capture kamera.
-  Future<AiResponse> sendChat(String userMessage, {String? locationInfo}) async {
+  Future<AiResponse> sendChat(String userMessage,
+      {String? locationInfo}) async {
     if (!_historyLoaded) {
       await initialize();
     }
@@ -416,7 +423,8 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
       // Bangun system prompt dengan lokasi jika tersedia
       String systemPrompt = _getSystemPrompt('obrolan');
       if (locationInfo != null && locationInfo.isNotEmpty) {
-        systemPrompt += '\n\n[INFO LOKASI SAAT INI]\n$locationInfo\nKamu TAHU lokasi teman kamu. Gunakan informasi ini untuk:\n- Menjawab pertanyaan "saya di mana?" atau "ini daerah apa?"\n- Jika ditanya tempat terdekat (supermarket, masjid, RS, ATM, dll), gunakan pengetahuan umummu tentang daerah ini untuk menyarankan tempat, tapi bilang bahwa ini berdasarkan pengetahuan umum dan sarankan untuk konfirmasi ke orang sekitar.\n- Memberikan konteks lingkungan (misal: area perkotaan, perumahan, dll).';
+        systemPrompt +=
+            '\n\n[INFO LOKASI SAAT INI]\n$locationInfo\nKamu TAHU lokasi teman kamu. Gunakan informasi ini untuk:\n- Menjawab pertanyaan "saya di mana?" atau "ini daerah apa?"\n- Jika ditanya tempat terdekat (supermarket, masjid, RS, ATM, dll), gunakan pengetahuan umummu tentang daerah ini untuk menyarankan tempat, tapi bilang bahwa ini berdasarkan pengetahuan umum dan sarankan untuk konfirmasi ke orang sekitar.\n- Memberikan konteks lingkungan (misal: area perkotaan, perumahan, dll).';
       }
 
       final messages = <Map<String, dynamic>>[
@@ -425,22 +433,19 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
         {'role': 'user', 'content': userMessage},
       ];
 
-      final body = jsonEncode({
+      final body = <String, dynamic>{
         'model': _model,
         'messages': messages,
         'max_tokens': 300,
         'temperature': 0.7,
-      });
+      };
 
-      final response = await http
-          .post(
-            Uri.parse(AppConstants.openRouterBaseUrl),
-            headers: _buildHeaders(),
-            body: body,
-          )
-          .timeout(Duration(seconds: AppConstants.httpTimeoutSeconds));
+      final enableTools = _toolsService != null;
+      if (enableTools) {
+        body['tools'] = _toolsService!.getToolDeclarations();
+      }
 
-      final aiResponse = _parseResponse(response);
+      final aiResponse = await _sendOpenRouterRequest(body, enableTools: enableTools);
 
       // Jika berhasil, simpan ke riwayat
       if (aiResponse.isSuccess) {
@@ -480,8 +485,6 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
   }
 
   /// Bersihkan riwayat percakapan asisten.
-  ///
-  /// Dipanggil saat ganti mode agar konteks tidak tercampur.
   void clearAssistantHistory() {
     _assistantHistory.clear();
     AppLogger.info(_tag, 'Riwayat asisten dibersihkan');
@@ -494,32 +497,91 @@ Ceritakan singkat apa yang ada di depan — termasuk warna dan tulisan yang terl
     AppLogger.info(_tag, 'Riwayat obrolan dibersihkan');
   }
 
-  // ─── Helpers ───────────────────────────────────────────────
+  // ─── OpenRouter Request with Tool Calling Loop ─────────────
 
-  /// Build HTTP headers untuk OpenRouter API.
-  Map<String, String> _buildHeaders() {
-    return {
-      'Authorization': 'Bearer $_apiKey',
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'https://sightassist.app',
-      'X-Title': 'SightAssist',
-    };
-  }
+  Future<AiResponse> _sendOpenRouterRequest(
+    Map<String, dynamic> body, {
+    bool enableTools = false,
+  }) async {
+    var currentBody = Map<String, dynamic>.from(body);
+    int iteration = 0;
 
-  /// Parse HTTP response dari OpenRouter.
-  AiResponse _parseResponse(http.Response response) {
-    if (response.statusCode == 200) {
+    while (iteration < _maxToolCallIterations) {
+      iteration++;
+
+      final response = await http
+          .post(
+            Uri.parse(AppConstants.openRouterBaseUrl),
+            headers: _buildHeaders(),
+            body: jsonEncode(currentBody),
+          )
+          .timeout(Duration(seconds: AppConstants.httpTimeoutSeconds));
+
+      if (response.statusCode != 200) {
+        final errorBody = response.body;
+        AppLogger.error(_tag, 'OpenRouter API Error ${response.statusCode}: $errorBody');
+        return AiResponse.error('Server error: ${response.statusCode}');
+      }
+
       final json = jsonDecode(response.body);
-      final content =
-          json['choices']?[0]?['message']?['content'] ?? 'Tidak ada respons';
-      final model = json['model'] ?? _model;
+      final choice = json['choices']?[0];
+      if (choice == null) {
+        return AiResponse.error('Tidak ada pilihan respons');
+      }
 
-      AppLogger.info(_tag, 'Respons diterima dari $model');
-      return AiResponse.success(description: content, model: model);
-    } else {
-      final errorBody = response.body;
-      AppLogger.error(_tag, 'API Error ${response.statusCode}: $errorBody');
-      return AiResponse.error('Server error: ${response.statusCode}');
+      final message = choice['message'] as Map<String, dynamic>?;
+      if (message == null) {
+        return AiResponse.error('Respons kosong dari server');
+      }
+
+      final toolCalls = message['tool_calls'] as List<dynamic>?;
+
+      // Handle function calling jika AI memanggil tool
+      if (toolCalls != null && toolCalls.isNotEmpty && enableTools && _toolsService != null) {
+        final currentMessages =
+            List<Map<String, dynamic>>.from(currentBody['messages'] as List);
+
+        // Tambahkan response model (dengan tool_calls)
+        currentMessages.add(message);
+
+        // Jalankan setiap tool call
+        for (final tc in toolCalls) {
+          final toolCallId = tc['id'] as String? ?? 'call_1';
+          final function = tc['function'] as Map<String, dynamic>? ?? {};
+          final name = function['name'] as String? ?? '';
+          final rawArgs = function['arguments'] as String? ?? '{}';
+
+          Map<String, dynamic> args = {};
+          try {
+            args = jsonDecode(rawArgs);
+          } catch (_) {}
+
+          AppLogger.info(_tag, 'AI memanggil tool via OpenRouter: $name (iterasi $iteration)');
+          final toolResult = await _toolsService!.executeTool(name, args);
+
+          // Tambahkan tool response message
+          currentMessages.add({
+            'role': 'tool',
+            'tool_call_id': toolCallId,
+            'content': jsonEncode(toolResult),
+          });
+        }
+
+        currentBody['messages'] = currentMessages;
+        continue; // Lanjut iterasi berikutnya untuk menerima jawaban final
+      }
+
+      // Ambil respons teks
+      final content = message['content'] as String? ?? 'Tidak ada respons';
+      final modelUsed = json['model'] as String? ?? _model;
+
+      AppLogger.info(_tag, 'Respons diterima dari $modelUsed');
+      return AiResponse.success(description: content, model: modelUsed);
     }
+
+    AppLogger.warning(
+        _tag, 'Tool calling loop OpenRouter melebihi batas $_maxToolCallIterations');
+    return AiResponse.error(
+        'Terlalu banyak tool calls. Coba lagi dengan pertanyaan spesifik.');
   }
 }

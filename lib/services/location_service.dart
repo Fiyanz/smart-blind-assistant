@@ -15,10 +15,6 @@ import '../core/utils/logger.dart';
 class LocationService {
   static const String _tag = 'LocationService';
 
-  /// URL Overpass API (OpenStreetMap — gratis, tanpa API key)
-  static const String _overpassUrl =
-      'https://overpass-api.de/api/interpreter';
-
   Position? _lastPosition;
   Placemark? _lastPlacemark;
 
@@ -38,13 +34,33 @@ class LocationService {
   /// Tempat-tempat terdekat yang sudah di-cache
   List<NearbyPlace> get nearbyPlaces => _nearbyPlaces;
 
+  /// Cek apakah layanan lokasi aktif di sistem HP
+  Future<bool> isLocationServiceEnabled() async {
+    try {
+      return await Geolocator.isLocationServiceEnabled();
+    } catch (e) {
+      AppLogger.error(_tag, 'Gagal cek status layanan lokasi', e);
+      return false;
+    }
+  }
+
+  /// Buka pengaturan lokasi di sistem HP (buka GPS settings)
+  Future<bool> openLocationSettings() async {
+    try {
+      return await Geolocator.openLocationSettings();
+    } catch (e) {
+      AppLogger.error(_tag, 'Gagal membuka pengaturan lokasi', e);
+      return false;
+    }
+  }
+
   /// Inisialisasi dan minta izin lokasi.
   ///
   /// Return true jika lokasi tersedia dan izin diberikan.
   Future<bool> initialize() async {
     try {
       // Cek apakah layanan lokasi aktif
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      bool serviceEnabled = await isLocationServiceEnabled();
       if (!serviceEnabled) {
         AppLogger.warning(_tag, 'Layanan lokasi tidak aktif');
         return false;
@@ -97,7 +113,8 @@ class LocationService {
 
   /// Konversi koordinat ke alamat menggunakan reverse geocoding.
   ///
-  /// Return Placemark dengan info: jalan, kelurahan, kecamatan, kota, dll.
+  /// Mencoba geocoding native OS terlebih dahulu, jika gagal
+  /// menggunakan OpenStreetMap Nominatim API sebagai fallback.
   Future<Placemark?> getPlacemarkFromPosition(Position position) async {
     try {
       final placemarks = await placemarkFromCoordinates(
@@ -114,16 +131,46 @@ class LocationService {
             '${_lastPlacemark!.subAdministrativeArea}');
         return _lastPlacemark;
       }
-
-      AppLogger.warning(_tag, 'Tidak ada placemark ditemukan');
-      return null;
     } catch (e) {
-      AppLogger.error(_tag, 'Gagal reverse geocoding', e);
-      return null;
+      AppLogger.warning(_tag, 'Native geocoding gagal, mencoba Nominatim OSM fallback...');
     }
+
+    // Fallback: OpenStreetMap Nominatim
+    try {
+      final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=json'
+          '&lat=${position.latitude}&lon=${position.longitude}&zoom=18&addressdetails=1');
+      final res = await http.get(url, headers: {
+        'User-Agent': 'SightAssist-Blind-App/1.0',
+      }).timeout(const Duration(seconds: 5));
+
+      if (res.statusCode == 200) {
+        final json = jsonDecode(res.body);
+        final addr = json['address'] as Map<String, dynamic>? ?? {};
+        final placemark = Placemark(
+          street: addr['road'] as String? ?? addr['suburb'] as String?,
+          subLocality: addr['village'] as String? ?? addr['neighbourhood'] as String?,
+          locality: addr['city'] as String? ?? addr['town'] as String? ?? addr['county'] as String?,
+          administrativeArea: addr['state'] as String?,
+          country: addr['country'] as String?,
+        );
+        _lastPlacemark = placemark;
+        return _lastPlacemark;
+      }
+    } catch (e) {
+      AppLogger.error(_tag, 'Nominatim fallback juga gagal', e);
+    }
+
+    return null;
   }
 
   // ─── Nearby Places (OpenStreetMap Overpass API) ─────────────
+
+  /// Daftar mirror Overpass API untuk redundancy
+  static const List<String> _overpassMirrors = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+  ];
 
   /// Cari tempat-tempat terdekat dari koordinat GPS menggunakan Overpass API.
   ///
@@ -172,18 +219,27 @@ class LocationService {
 out center body;
 ''';
 
-      final response = await http
-          .post(
-            Uri.parse(_overpassUrl),
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: 'data=${Uri.encodeComponent(query)}',
-          )
-          .timeout(const Duration(seconds: 12));
+      http.Response? response;
+      for (final endpoint in _overpassMirrors) {
+        try {
+          response = await http
+              .post(
+                Uri.parse(endpoint),
+                body: {'data': query},
+              )
+              .timeout(const Duration(seconds: 8));
 
-      if (response.statusCode != 200) {
-        AppLogger.error(
-            _tag, 'Overpass API error: ${response.statusCode}');
-        return _nearbyPlaces; // Return cache lama jika ada
+          if (response.statusCode == 200) {
+            break; // Berhasil
+          }
+        } catch (e) {
+          AppLogger.warning(_tag, 'Mirror $endpoint gagal, mencoba mirror berikutnya: $e');
+        }
+      }
+
+      if (response == null || response.statusCode != 200) {
+        AppLogger.error(_tag, 'Semua mirror Overpass API gagal');
+        return _nearbyPlaces;
       }
 
       final json = jsonDecode(response.body);

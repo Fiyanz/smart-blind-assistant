@@ -186,51 +186,103 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       body: SafeArea(
         child: Consumer<AssistantProvider>(
           builder: (context, assistant, child) {
-            return Column(
-              children: [
-                // ─── Area Utama (Kamera / Chat) ──────────────
-                Expanded(
-                  flex: 3,
-                  child: assistant.mode == AssistantMode.obrolan
-                      ? _buildChatView(assistant)
-                      : _buildCameraPreview(assistant),
-                ),
-
-                // ─── Panel Bawah ─────────────────────────────
-                Container(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                  decoration: BoxDecoration(
-                    color: AppTheme.scaffoldBg,
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(20),
-                    ),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Status koneksi BLE (compact)
-                      const ConnectionStatusCard(),
-                      const SizedBox(height: 12),
-
-                      // Status asisten
-                      const AssistantStatusIndicator(),
-                      const SizedBox(height: 12),
-
-                      // Voice prompt (tampil di semua mode)
-                      _buildVoicePrompt(assistant),
-
-                      const SizedBox(height: 12),
-
-                      _buildActionButtons(assistant),
-
-                    ],
-                  ),
-                ),
-              ],
+            return OrientationBuilder(
+              builder: (context, orientation) {
+                if (orientation == Orientation.landscape) {
+                  return _buildLandscapeLayout(assistant);
+                }
+                return _buildPortraitLayout(assistant);
+              },
             );
           },
         ),
       ),
+    );
+  }
+
+  /// Layout vertikal untuk orientasi Portrait
+  Widget _buildPortraitLayout(AssistantProvider assistant) {
+    return Column(
+      children: [
+        // ─── Area Utama (Kamera / Chat) ──────────────
+        Expanded(
+          flex: 3,
+          child: assistant.mode == AssistantMode.obrolan
+              ? _buildChatView(assistant)
+              : _buildCameraPreview(assistant),
+        ),
+
+        // ─── Panel Bawah ─────────────────────────────
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          decoration: BoxDecoration(
+            color: AppTheme.scaffoldBg,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(20),
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Status koneksi BLE (compact)
+              const ConnectionStatusCard(),
+              const SizedBox(height: 12),
+
+              // Status asisten
+              const AssistantStatusIndicator(),
+              const SizedBox(height: 12),
+
+              // Voice prompt (tampil di semua mode)
+              _buildVoicePrompt(assistant),
+
+              const SizedBox(height: 12),
+
+              _buildActionButtons(assistant),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Layout horizontal Split-View untuk orientasi Landscape
+  Widget _buildLandscapeLayout(AssistantProvider assistant) {
+    return Row(
+      children: [
+        // ─── Area Kiri (Kamera / Chat) ───────────────
+        Expanded(
+          flex: 5,
+          child: Container(
+            color: Colors.black,
+            child: assistant.mode == AssistantMode.obrolan
+                ? _buildChatView(assistant)
+                : _buildCameraPreview(assistant),
+          ),
+        ),
+
+        // ─── Area Kanan (Panel Kontrol & Status) ──────
+        Expanded(
+          flex: 4,
+          child: Container(
+            color: AppTheme.scaffoldBg,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const ConnectionStatusCard(),
+                  const SizedBox(height: 10),
+                  const AssistantStatusIndicator(),
+                  const SizedBox(height: 10),
+                  _buildVoicePrompt(assistant),
+                  const SizedBox(height: 10),
+                  _buildActionButtons(assistant),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -269,7 +321,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: [
         // Camera preview
         ClipRRect(
-          child: CameraPreview(controller),
+          child: Center(
+            child: CameraPreview(controller),
+          ),
         ),
 
         // Time and Location overlay
